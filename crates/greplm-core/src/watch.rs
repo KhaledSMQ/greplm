@@ -1,7 +1,9 @@
 //! Live incremental indexing driven by filesystem events.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, RecvTimeoutError};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
@@ -20,11 +22,28 @@ use crate::Greplm;
 /// The loop is resilient: a failed incremental index is logged and the watcher
 /// keeps running, and watcher-level errors are logged rather than silently
 /// dropped. It returns only when the watcher is dropped/disconnected.
-pub fn run<F: FnMut(&IndexStats)>(
+pub fn run<F: FnMut(&IndexStats)>(greplm: &Greplm, debounce: Duration, on_change: F) -> Result<()> {
+    // A flag that never flips: the watcher runs until the channel disconnects.
+    run_cancellable(
+        greplm,
+        debounce,
+        Arc::new(AtomicBool::new(false)),
+        on_change,
+    )
+}
+
+/// Like [`run`], but exits promptly when `stop` is set. The global daemon uses
+/// this to tear down a project's watcher when the project is evicted for being
+/// idle, instead of leaking a thread + OS watch per project ever touched.
+pub fn run_cancellable<F: FnMut(&IndexStats)>(
     greplm: &Greplm,
     debounce: Duration,
+    stop: Arc<AtomicBool>,
     mut on_change: F,
 ) -> Result<()> {
+    /// How often to wake and re-check the `stop` flag while otherwise idle.
+    const POLL: Duration = Duration::from_millis(250);
+
     let filter = Filter::new(greplm.paths(), greplm.config())?;
 
     let (tx, rx) = channel();
@@ -39,8 +58,11 @@ pub fn run<F: FnMut(&IndexStats)>(
         .map_err(|e| Error::other(format!("watch: {e}")))?;
 
     loop {
-        // Block for the first relevant event.
-        match rx.recv() {
+        if stop.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        // Wait for the first relevant event, waking periodically to honor `stop`.
+        match rx.recv_timeout(POLL) {
             Ok(Ok(ev)) => {
                 if !filter.is_relevant(&ev) {
                     continue;
@@ -52,13 +74,17 @@ pub fn run<F: FnMut(&IndexStats)>(
                 tracing::warn!("watch event error: {e}");
                 continue;
             }
-            Err(_) => break, // watcher dropped
+            Err(RecvTimeoutError::Timeout) => continue, // re-check `stop`
+            Err(RecvTimeoutError::Disconnected) => break, // watcher dropped
         }
 
         // Coalesce a burst of events within the debounce window. The deadline is
         // fixed so a steady stream of events can't extend the window forever.
         let deadline = Instant::now() + debounce;
         loop {
+            if stop.load(Ordering::Relaxed) {
+                return Ok(());
+            }
             match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
                 Ok(_) => continue,
                 Err(RecvTimeoutError::Timeout) => break,

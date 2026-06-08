@@ -33,6 +33,17 @@ mod stub_impl {
                 "greplm daemon is not supported on this platform",
             ))
         }
+
+        /// Always errors: no daemon is available on this platform.
+        pub fn request_routed(
+            &mut self,
+            _root: &std::path::Path,
+            _req: &Request,
+        ) -> Result<Response> {
+            Err(Error::other(
+                "greplm daemon is not supported on this platform",
+            ))
+        }
     }
 }
 
@@ -43,7 +54,7 @@ mod unix_impl {
     use std::path::Path;
 
     use crate::error::{Error, Result};
-    use crate::proto::{Request, Response};
+    use crate::proto::{Request, Response, RoutedRequest};
 
     /// A connected client to a running greplm daemon.
     pub struct Client {
@@ -63,9 +74,23 @@ mod unix_impl {
             })
         }
 
-        /// Send a request and read the response.
+        /// Send a request to a per-project daemon and read the response.
         pub fn request(&mut self, req: &Request) -> Result<Response> {
-            let mut bytes = serde_json::to_vec(req)?;
+            self.round_trip(req)
+        }
+
+        /// Send a request to the global multi-root daemon, addressed to a
+        /// specific project `root`, and read the response.
+        pub fn request_routed(&mut self, root: &Path, req: &Request) -> Result<Response> {
+            let routed = RoutedRequest {
+                root: root.to_path_buf(),
+                req: req.clone(),
+            };
+            self.round_trip(&routed)
+        }
+
+        fn round_trip<T: serde::Serialize>(&mut self, value: &T) -> Result<Response> {
+            let mut bytes = serde_json::to_vec(value)?;
             bytes.push(b'\n');
             self.writer.write_all(&bytes).map_err(Error::PlainIo)?;
             self.writer.flush().map_err(Error::PlainIo)?;

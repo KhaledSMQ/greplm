@@ -318,8 +318,38 @@ sub-millisecond:
 greplm serve
 ```
 
-While it's running, query commands automatically route to it. Pass `--no-daemon` to force an
-in-process query.
+While it's running, query commands automatically route to it (so does the MCP server). Pass
+`--no-daemon` to force an in-process query.
+
+The daemon is what makes greplm fast for agents: a warm socket query is ~sub-ms, versus ~25ms
+to cold-open the index per call. Keep it running so that advantage is never lost.
+
+#### One daemon for every project
+
+For running many agents across many repos, use the **global daemon** — a single background
+process that serves *every* project on the machine over one per-user socket:
+
+```bash
+greplm serve --global
+```
+
+It loads each project lazily on first query (its own warm index + watcher) and evicts projects
+that go idle, so memory tracks only what you're actively working on. Queries and the MCP server
+auto-discover the project root and route to it — no per-project setup. A per-project `greplm serve`
+still works and is tried as a fallback.
+
+#### Keep it always-on
+
+Run it as a background service that starts at login and restarts if it dies.
+
+**macOS (launchd):**
+
+```bash
+contrib/launchd/install-launchd.sh --global              # one daemon for all projects (recommended)
+contrib/launchd/install-launchd.sh /abs/path/to/project  # or just one project
+```
+
+**Linux (systemd user service):** [`contrib/systemd/greplm-global.service`](contrib/systemd/greplm-global.service) (all projects, recommended) or the per-project template [`contrib/systemd/greplm-daemon@.service`](contrib/systemd/greplm-daemon@.service); each file documents its one-time `systemctl --user enable --now` command.
 
 ### Semantic search (optional)
 

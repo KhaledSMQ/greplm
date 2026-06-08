@@ -931,7 +931,7 @@ pub fn build(greplm: &Greplm, embedder: &dyn Embedder) -> Result<usize> {
     greplm.ensure_initialized()?;
     let paths = Paths::new(greplm.root());
     let config = greplm.config().clone();
-    let entries = walk::walk(&paths, &config)?;
+    let entries = walk::walk(&paths, &config)?.entries;
 
     let dim = embedder.dim();
 

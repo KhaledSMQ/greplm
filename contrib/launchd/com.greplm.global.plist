@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  greplm GLOBAL warm-index daemon as a macOS LaunchAgent.
+
+  One process serves every project you touch (lazy load + idle eviction) over a
+  single per-user socket, so any number of agents across any number of repos
+  share one background daemon. Prefer this over the per-project plist.
+
+  TEMPLATE: install-launchd.sh --global fills these in (or replace by hand):
+    @GREPLM@  absolute path to the greplm binary (`command -v greplm`)
+    @LOG@     absolute path for the daemon log
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.greplm.global</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>@GREPLM@</string>
+    <string>serve</string>
+    <string>--global</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>@LOG@</string>
+  <key>StandardErrorPath</key>
+  <string>@LOG@</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>GREPLM_LOG</key>
+    <string>info</string>
+  </dict>
+</dict>
+</plist>

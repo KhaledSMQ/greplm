@@ -13,6 +13,7 @@ greplm index                          # build or refresh the index
 greplm search "authentication flow"
 greplm search "SegmentWriter" --word  # whole-identifier match
 greplm search -e 'fn .*candidates' --lang rust --limit 20
+greplm search "needle" --exhaustive       # every match: no ranking/limit/per-file cap (grep parity)
 greplm symbols extract --exact        # symbol / definition lookup
 greplm outline crates/greplm-core/src/trigram.rs
 greplm snippet crates/greplm-core/src/trigram.rs 15 25 --context 3
@@ -46,13 +47,13 @@ curl -fsSL https://raw.githubusercontent.com/KhaledSMQ/greplm/main/install.sh | 
 
 ### Workflow
 
-1. Run `greplm index` before searching a project (incremental by default).
+1. Run `greplm index` before searching a project (incremental by default). `indexed 0 files` means nothing *changed* since the last run — **not** an empty index; confirm the index is populated with `greplm status`/`greplm summary` (check `files`/`doc_count`) before falling back to grep.
 2. Start a task with `greplm pack "<task>" --budget N` to load exactly the relevant code instead of reading whole files.
 3. Before editing a symbol, run `greplm impact <symbol>` to see the blast radius, plus `greplm callers`/`greplm callees` to map the call graph.
 4. Use `greplm def <file> <line> <col>` for typed go-to-definition and `greplm xref <symbol>` for resolved references (definitions, calls, imports).
 5. Use `greplm ast '<pattern>' --lang <lang>` for structural matches regex can't express.
 6. Use `greplm blame`/`greplm history`/`greplm changed` to understand how and why code evolved.
-7. Use grep only when you need exhaustive literal matches or quick confirmation of an exact string.
+7. For "find every occurrence", use `greplm search --exhaustive` (no ranking/limit/per-file cap); drop to raw grep only for a quick one-off confirmation of an exact string.
 
 ### Reporting results
 

@@ -170,4 +170,9 @@ case ":${PATH}:" in
         ;;
 esac
 
-echo "Done. Run: greplm --help"
+echo "Done."
+echo
+echo "Next steps:"
+echo "  cd <your project> && greplm setup   # build the index + start an always-on daemon"
+echo "  greplm doctor                       # check everything is healthy"
+echo "  greplm --help"

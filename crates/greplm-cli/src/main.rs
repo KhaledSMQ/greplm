@@ -1,18 +1,19 @@
 //! greplm command-line interface.
 
 mod agent;
+mod ops;
 
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use greplm_core::client::Client;
 use greplm_core::context::ContextPack;
 use greplm_core::git::BlameLine;
-use greplm_core::proto::Request;
+use greplm_core::proto::{Request, Response};
 use greplm_core::search::{
     CallSite, ChangedSymbols, DefHit, ImpactNode, RefHit, RepoSummary, SearchHit, SearchQuery,
     Snippet, StructHit, SymbolHistory, SymbolHit, SymbolQuery,
@@ -85,8 +86,42 @@ enum Command {
     /// Install the bundled greplm agent definition for a coding tool.
     #[command(subcommand)]
     Agent(AgentCommand),
+    /// Diagnose common problems (and with --fix, repair the safe ones).
+    Doctor(DoctorArgs),
+    /// Update greplm to the latest release.
+    Update(UpdateArgs),
+    /// First-run setup: build the index and install an always-on daemon.
+    Setup(SetupArgs),
     /// Delete the .greplm index directory.
     Clean(RootArg),
+}
+
+#[derive(Debug, Args)]
+struct DoctorArgs {
+    /// Project root (defaults to the current directory).
+    #[arg(long, short = 'C')]
+    root: Option<PathBuf>,
+    /// Repair the issues that are safe to fix automatically (build/refresh the
+    /// index, install the daemon service).
+    #[arg(long)]
+    fix: bool,
+}
+
+#[derive(Debug, Args)]
+struct UpdateArgs {
+    /// Only report whether a newer version exists; don't install it.
+    #[arg(long)]
+    check: bool,
+}
+
+#[derive(Debug, Args)]
+struct SetupArgs {
+    /// Project root (defaults to the current directory).
+    #[arg(long, short = 'C')]
+    root: Option<PathBuf>,
+    /// Build the index but do not install the always-on daemon service.
+    #[arg(long)]
+    no_daemon_service: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -169,6 +204,18 @@ struct IndexArgs {
     /// Rebuild the entire index from scratch.
     #[arg(long)]
     force: bool,
+    /// Also index binary (NUL-containing) files, like `grep -a`.
+    #[arg(long)]
+    index_binary: bool,
+    /// Also index empty (zero-byte) files.
+    #[arg(long)]
+    index_empty: bool,
+    /// Skip files larger than this many bytes (0 = no limit). Overrides config.
+    #[arg(long)]
+    max_file_size: Option<u64>,
+    /// Print a sample of skipped files and why they were skipped.
+    #[arg(long)]
+    explain_skips: bool,
     /// Emit machine-readable JSON.
     #[arg(long)]
     json: bool,
@@ -204,6 +251,10 @@ struct SearchArgs {
     /// Maximum matches reported per file.
     #[arg(long, default_value_t = 20)]
     max_per_file: usize,
+    /// Return EVERY match (grep parity): no ranking, no limit, no per-file cap.
+    /// Use when completeness matters more than relevance.
+    #[arg(long)]
+    exhaustive: bool,
     /// Emit machine-readable JSON.
     #[arg(long)]
     json: bool,
@@ -425,34 +476,55 @@ struct WatchArgs {
 struct ServeArgs {
     #[command(flatten)]
     root: RootArg,
+    /// Serve EVERY project on this machine from one daemon, loading each lazily
+    /// on first query and evicting idle ones. Listens on the global socket, so a
+    /// single background process covers all your repos. Ignores `-C`.
+    #[arg(long)]
+    global: bool,
 }
 
 fn cwd() -> Result<PathBuf> {
     std::env::current_dir().context("cannot determine current directory")
 }
 
-/// Try to connect to a running daemon for this project (unless suppressed).
-fn daemon_client(root: &RootArg) -> Option<Client> {
+/// Route a request through a running daemon if one can serve it: the global
+/// multi-root daemon first, then a per-project daemon. Returns `None` to signal
+/// the caller should run the query in-process (no daemon, or neither could
+/// serve it).
+fn via_daemon<T: DeserializeOwned>(root: &RootArg, req: Request) -> Option<Result<T>> {
     if root.no_daemon {
         return None;
     }
     let g = open_for_query(root).ok()?;
-    Client::try_connect(&g.socket_path())
-}
 
-/// Route a request through the daemon if one is running. Returns `None` to
-/// signal the caller should run the query in-process.
-fn via_daemon<T: DeserializeOwned>(root: &RootArg, req: Request) -> Option<Result<T>> {
-    let mut client = daemon_client(root)?;
-    Some((|| {
-        let resp = client.request(&req)?;
+    /// Decode an OK response; on a daemon error response, return `None` so the
+    /// caller falls back to the next transport rather than surfacing it.
+    fn decode<T: DeserializeOwned>(resp: Response) -> Option<Result<T>> {
         if resp.ok {
             let v = resp.result.unwrap_or(serde_json::Value::Null);
-            Ok(serde_json::from_value(v)?)
+            Some(serde_json::from_value(v).map_err(Into::into))
         } else {
-            bail!("daemon error: {}", resp.error.unwrap_or_default())
+            None
         }
-    })())
+    }
+
+    // Global daemon (serves every project; addressed by resolved root).
+    if let Some(mut c) = Client::try_connect(&greplm_core::proto::global_socket_path()) {
+        if let Ok(resp) = c.request_routed(g.root(), &req) {
+            if let Some(r) = decode(resp) {
+                return Some(r);
+            }
+        }
+    }
+    // Per-project daemon.
+    if let Some(mut c) = Client::try_connect(&g.socket_path()) {
+        if let Ok(resp) = c.request(&req) {
+            if let Some(r) = decode(resp) {
+                return Some(r);
+            }
+        }
+    }
+    None
 }
 
 fn open_for_index(root: &RootArg) -> Result<Greplm> {
@@ -532,6 +604,21 @@ fn run() -> Result<()> {
         Command::SemanticSearch(args) => cmd_semantic_search(args),
         Command::Savings(args) => cmd_savings(args),
         Command::Agent(cmd) => cmd_agent(cmd),
+        Command::Doctor(args) => {
+            let root = match args.root {
+                Some(r) => r,
+                None => cwd()?,
+            };
+            ops::doctor(&root, args.fix)
+        }
+        Command::Update(args) => ops::update(args.check),
+        Command::Setup(args) => {
+            let root = match args.root {
+                Some(r) => r,
+                None => cwd()?,
+            };
+            ops::setup(&root, !args.no_daemon_service)
+        }
         Command::Clean(args) => cmd_clean(args),
     }
 }
@@ -634,14 +721,40 @@ fn cmd_init(args: RootArg) -> Result<()> {
 }
 
 fn cmd_index(args: IndexArgs) -> Result<()> {
+    // Translate one-off flags into env overrides, which `Config::load` applies on
+    // top of the persisted config. This keeps a single override path (env) and
+    // avoids mutating `config.toml`.
+    if args.index_binary {
+        std::env::set_var("GREPLM_INDEX_BINARY", "1");
+    }
+    if args.index_empty {
+        std::env::set_var("GREPLM_INDEX_EMPTY", "1");
+    }
+    if let Some(n) = args.max_file_size {
+        std::env::set_var("GREPLM_MAX_FILE_SIZE", n.to_string());
+    }
+
     let g = open_for_index(&args.root)?;
     let start = std::time::Instant::now();
     let stats = g.index(args.force)?;
     let elapsed = start.elapsed();
+
+    // Render the per-reason skip breakdown as e.g. "binary=3, too_large=1".
+    let skip_breakdown = || -> String {
+        stats
+            .skipped_by_reason
+            .iter()
+            .map(|(reason, n)| format!("{}={}", reason.as_str(), n))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
     if args.json {
         let v = serde_json::json!({
             "files_indexed": stats.files_indexed,
             "files_skipped": stats.files_skipped,
+            "skipped_by_reason": stats.skipped_by_reason,
+            "skipped_sample": stats.skipped_sample,
             "files_removed": stats.files_removed,
             "symbols": stats.symbols,
             "segments": stats.segments,
@@ -653,6 +766,26 @@ fn cmd_index(args: IndexArgs) -> Result<()> {
             "indexed {} files ({} symbols), {} removed, {} segment(s) in {:.2?}",
             stats.files_indexed, stats.symbols, stats.files_removed, stats.segments, elapsed
         );
+        if stats.files_skipped > 0 {
+            println!(
+                "skipped {} files ({})",
+                stats.files_skipped,
+                skip_breakdown()
+            );
+            if args.explain_skips {
+                for s in &stats.skipped_sample {
+                    println!("  {} ({})", s.rel, s.reason.as_str());
+                }
+                if stats.skipped_sample.len() < stats.files_skipped {
+                    println!(
+                        "  ... and {} more",
+                        stats.files_skipped - stats.skipped_sample.len()
+                    );
+                }
+            } else {
+                println!("  (run with --explain-skips to list them)");
+            }
+        }
     }
     Ok(())
 }
@@ -668,10 +801,17 @@ fn cmd_search(args: SearchArgs) -> Result<()> {
         limit: args.limit,
         offset: args.offset,
         max_per_file: args.max_per_file,
+        exhaustive: args.exhaustive,
     };
     let hits: Vec<SearchHit> = match via_daemon(&args.root, Request::Search(query.clone())) {
         Some(r) => r?,
-        None => open_for_query(&args.root)?.searcher()?.search(&query)?,
+        None => {
+            // In-process (no daemon): self-heal a missing index, then search
+            // with a transparent grep fallback if the index is unavailable.
+            let g = open_for_query(&args.root)?;
+            let _ = g.ensure_indexed();
+            g.search_or_grep(&query)?
+        }
     };
     let files: BTreeSet<String> = hits.iter().map(|h| h.path.clone()).collect();
     record_savings(&args.root, "search", files, hits.len() as u64, &hits);
@@ -1197,6 +1337,15 @@ fn cmd_status(args: RootArg) -> Result<()> {
 }
 
 fn cmd_serve(args: ServeArgs) -> Result<()> {
+    if args.global {
+        let socket = greplm_core::proto::global_socket_path();
+        eprintln!(
+            "greplm global daemon: serving all projects on {} (lazy, idle-evicted)",
+            socket.display()
+        );
+        greplm_core::daemon::serve_global(&socket)?;
+        return Ok(());
+    }
     let g = open_for_index(&args.root)?;
     g.ensure_initialized()?;
     let socket = g.socket_path();

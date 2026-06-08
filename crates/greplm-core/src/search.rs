@@ -10,7 +10,9 @@ use rayon::prelude::*;
 use regex::bytes::Regex as BytesRegex;
 use serde::{Deserialize, Serialize};
 
+use crate::config::Config;
 use crate::error::{Error, Result};
+use crate::lang::Language;
 use crate::meta::Meta;
 use crate::paths::Paths;
 use crate::segment::{RefKind, Segment};
@@ -31,6 +33,12 @@ pub struct SearchQuery {
     /// Skip the first N ranked results (for pagination).
     pub offset: usize,
     pub max_per_file: usize,
+    /// Return EVERY match in deterministic (path, line) order: no ranking, no
+    /// global `limit`, and no per-file caps (`max_per_file` and the internal
+    /// pathological-input cap are both lifted). This is grep-equivalent
+    /// completeness; use it when "find every occurrence" matters more than
+    /// relevance ranking. `offset`/`limit` are ignored when set.
+    pub exhaustive: bool,
 }
 
 impl Default for SearchQuery {
@@ -45,6 +53,7 @@ impl Default for SearchQuery {
             limit: 50,
             offset: 0,
             max_per_file: 20,
+            exhaustive: false,
         }
     }
 }
@@ -415,7 +424,8 @@ impl Searcher {
         let content = &self.content;
         let max_per_file = query.max_per_file;
         let whole_word = query.whole_word;
-        let hits: Vec<SearchHit> = targets
+        let exhaustive = query.exhaustive;
+        let mut hits: Vec<SearchHit> = targets
             .par_iter()
             .flat_map_iter(|&(si, doc_id)| {
                 verify_doc(
@@ -426,10 +436,23 @@ impl Searcher {
                     &matcher,
                     max_per_file,
                     whole_word,
+                    exhaustive,
                 )
                 .into_iter()
             })
             .collect();
+
+        if query.exhaustive {
+            // Grep-equivalent: every match, deterministic (path, line, column)
+            // order, no ranking and no offset/limit truncation.
+            hits.sort_by(|a, b| {
+                a.path
+                    .cmp(&b.path)
+                    .then_with(|| a.line.cmp(&b.line))
+                    .then_with(|| a.column.cmp(&b.column))
+            });
+            return Ok(hits);
+        }
 
         let cmp = |a: &SearchHit, b: &SearchHit| {
             b.score
@@ -1421,6 +1444,7 @@ pub struct DirStat {
 /// Read a single candidate file and collect matching lines. Matches are found
 /// over the whole buffer (so regexes may span lines), mapped to line numbers,
 /// then ranked so the highest-scored matches survive `max_per_file` truncation.
+#[allow(clippy::too_many_arguments)] // hot path; threading a struct adds churn without clarity
 fn verify_doc(
     seg: &Segment,
     doc_id: u32,
@@ -1429,6 +1453,7 @@ fn verify_doc(
     matcher: &Matcher,
     max_per_file: usize,
     whole_word: bool,
+    exhaustive: bool,
 ) -> Vec<SearchHit> {
     let doc = match seg.doc(doc_id) {
         Some(d) => d,
@@ -1440,7 +1465,13 @@ fn verify_doc(
         None => return Vec::new(),
     };
 
-    let matches = matcher.match_starts(&data, whole_word, PER_FILE_MATCH_CAP);
+    // Exhaustive search lifts the pathological-input cap so no match is dropped.
+    let cap = if exhaustive {
+        usize::MAX
+    } else {
+        PER_FILE_MATCH_CAP
+    };
+    let matches = matcher.match_starts(&data, whole_word, cap);
     if matches.is_empty() {
         return Vec::new();
     }
@@ -1476,7 +1507,8 @@ fn verify_doc(
     }
 
     // Keep the highest-scored matches when a file has more than the cap.
-    if out.len() > max_per_file {
+    // Exhaustive mode keeps every line.
+    if !exhaustive && out.len() > max_per_file {
         out.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
@@ -1614,6 +1646,110 @@ where
     items.drain(0..offset);
     items.truncate(limit);
     items
+}
+
+/// Index-free fallback search: walk the working tree and scan every file with
+/// the matcher, with no trigram prefilter. Used when the index is missing or
+/// errors, so `search` still returns grep-equivalent results instead of failing.
+/// Honors the same `lang`/`path` filters, `exhaustive` mode, and ordering as the
+/// indexed path. Slower (reads every candidate file) but correct and complete.
+pub fn grep_walk(paths: &Paths, config: &Config, query: &SearchQuery) -> Result<Vec<SearchHit>> {
+    if query.pattern.is_empty() {
+        return Ok(Vec::new());
+    }
+    let matcher = Matcher::build(query)?;
+    let walked = crate::walk::walk(paths, config)?;
+    let path_filter = query.path.as_deref();
+    let lang_filter = query.lang.as_deref();
+    let max_per_file = query.max_per_file;
+    let whole_word = query.whole_word;
+    let exhaustive = query.exhaustive;
+    let index_binary = config.index_binary;
+    let cap = if exhaustive {
+        usize::MAX
+    } else {
+        PER_FILE_MATCH_CAP
+    };
+
+    let mut hits: Vec<SearchHit> = walked
+        .entries
+        .par_iter()
+        .flat_map_iter(|e| {
+            if path_filter.is_some_and(|pf| !e.rel.contains(pf)) {
+                return Vec::new().into_iter();
+            }
+            let ext = e
+                .path
+                .extension()
+                .and_then(|x| x.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let lang_id = Language::from_extension(&ext).id().to_string();
+            if lang_filter.is_some_and(|lf| lang_id != lf) {
+                return Vec::new().into_iter();
+            }
+            let data = match std::fs::read(&e.path) {
+                Ok(d) => d,
+                Err(_) => return Vec::new().into_iter(),
+            };
+            if !index_binary && memchr::memchr(0, &data).is_some() {
+                return Vec::new().into_iter();
+            }
+            let matches = matcher.match_starts(&data, whole_word, cap);
+            if matches.is_empty() {
+                return Vec::new().into_iter();
+            }
+            let starts = line_starts(&data);
+            let base = path_score(&e.rel);
+            let mut out = Vec::new();
+            let mut last_line = 0u32;
+            for (start, _end) in matches {
+                let li = line_of(start, &starts);
+                let line_no = li as u32 + 1;
+                if line_no == last_line {
+                    continue;
+                }
+                last_line = line_no;
+                let col = (start - starts[li]) as u32 + 1;
+                out.push(SearchHit {
+                    path: e.rel.clone(),
+                    lang: lang_id.clone(),
+                    line: line_no,
+                    column: col,
+                    text: snippet(line_slice(&data, &starts, li)),
+                    score: 1.0 + base,
+                });
+            }
+            if !exhaustive && out.len() > max_per_file {
+                out.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.line.cmp(&b.line))
+                });
+                out.truncate(max_per_file);
+            }
+            out.into_iter()
+        })
+        .collect();
+
+    if exhaustive {
+        hits.sort_by(|a, b| {
+            a.path
+                .cmp(&b.path)
+                .then_with(|| a.line.cmp(&b.line))
+                .then_with(|| a.column.cmp(&b.column))
+        });
+        return Ok(hits);
+    }
+    let cmp = |a: &SearchHit, b: &SearchHit| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.path.cmp(&b.path))
+            .then_with(|| a.line.cmp(&b.line))
+    };
+    Ok(rank_paginate(hits, cmp, query.offset, query.limit))
 }
 
 /// Number of leading path components shared by two relative paths.
