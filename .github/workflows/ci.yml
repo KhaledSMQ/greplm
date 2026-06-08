@@ -71,3 +71,52 @@ jobs:
       # Compile (don't run) the criterion benches so they can't bit-rot.
       # Actual measurements run in the dedicated `benchmarks` workflow.
       - run: cargo bench -p greplm-core --no-run --locked
+
+  features:
+    name: feature matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # Optional semantic (vector) layer: lint, build, and test with it on.
+      - run: cargo clippy -p greplm-core --features semantic --all-targets --locked
+      - run: cargo test -p greplm-core --features semantic --locked
+      - run: cargo build -p greplm-cli --features semantic --locked
+      # Linux-only io_uring ingest backend: lint and build with it on.
+      - run: cargo clippy -p greplm-core --features io-uring --all-targets --locked
+      - run: cargo build -p greplm-core --features io-uring --locked
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Collect coverage
+        run: cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+      - name: Coverage summary
+        if: always()
+        run: |
+          {
+            echo '## Coverage summary'
+            echo ''
+            echo '```'
+            cargo llvm-cov report --summary-only || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload lcov
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info
+          if-no-files-found: ignore

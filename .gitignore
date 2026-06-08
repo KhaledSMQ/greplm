@@ -2,3 +2,5 @@
 .greplm/
 __pycache__/
 bench/projects/out/
+# Coverage output (cargo-llvm-cov)
+/lcov.info
