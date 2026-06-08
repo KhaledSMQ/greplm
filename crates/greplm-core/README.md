@@ -122,7 +122,7 @@ Query interface over a loaded index. Key methods:
 - [`greplm-cli`](../greplm-cli) — command-line interface (`greplm`)
 - [`greplm-mcp`](../greplm-mcp) — MCP stdio server (`greplm-mcp`)
 
-See the [project README](https://github.com/KhaledSMQ/greplm#readme) for the full feature list, benchmarks, and agent setup.
+See the [project docs](https://github.com/KhaledSMQ/greplm/blob/main/docs/README.md) for the full feature list, benchmarks, and agent setup.
 
 ## License
 

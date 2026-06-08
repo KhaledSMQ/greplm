@@ -101,7 +101,7 @@ The process speaks MCP over stdin/stdout. Use an MCP inspector or your IDE to in
 - [`greplm-core`](../greplm-core) — indexing and search library
 - [`greplm-cli`](../greplm-cli) — command-line interface (`greplm`)
 
-See the [project README](https://github.com/KhaledSMQ/greplm#mcp-server) for the full tool reference and agent setup (`greplm agent add`).
+See the [MCP docs](https://github.com/KhaledSMQ/greplm/blob/main/docs/mcp.md) for the full tool reference and [getting started](https://github.com/KhaledSMQ/greplm/blob/main/docs/getting-started.md) for agent setup (`greplm agent add`).
 
 ## License
 

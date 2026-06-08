@@ -152,7 +152,7 @@ Query commands automatically route to the daemon while it runs. Pass `--no-daemo
 - [`greplm-core`](../greplm-core) — indexing and search library
 - [`greplm-mcp`](../greplm-mcp) — MCP server for IDE/agent integration
 
-See the [project README](https://github.com/KhaledSMQ/greplm#readme) for MCP setup, benchmarks, and the full comparison with ripgrep and LSP.
+See the [project docs](https://github.com/KhaledSMQ/greplm/blob/main/docs/README.md) for MCP setup, benchmarks, and the full comparison with ripgrep and LSP.
 
 ## License
 
