@@ -8,6 +8,7 @@ greplm is a hot local index for LLM agents. It answers search, call-graph, go-to
 AST, and git queries in **milliseconds** and hands back the exact lines that matter — never
 file bodies. Same answers as grep-and-read, with up to **~99% fewer tokens**, fully offline.
 
+[![CI](https://github.com/KhaledSMQ/greplm/actions/workflows/ci.yml/badge.svg)](https://github.com/KhaledSMQ/greplm/actions/workflows/ci.yml)
 [![Release](https://github.com/KhaledSMQ/greplm/actions/workflows/release.yml/badge.svg)](https://github.com/KhaledSMQ/greplm/actions/workflows/release.yml)
 [![crates.io](https://img.shields.io/crates/v/greplm-cli.svg)](https://crates.io/crates/greplm-cli)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
@@ -220,6 +221,16 @@ Full breakdown: [Features & comparison](docs/features.md).
 
 Full index: **[docs/README.md](docs/README.md)**
 
+## Contributing & project health
+
+greplm is engineered to be dependable: property-based equivalence tests,
+crash-injection durability tests, continuous fuzzing, microbenchmarks, and CI
+across Linux, macOS, and Windows guard every change.
+
+- **[Contributing guide](CONTRIBUTING.md)** — local workflow, the checks CI enforces, and how releases are cut
+- **[Changelog](CHANGELOG.md)** — release history
+- **[Security policy](SECURITY.md)** — how to report a vulnerability
+
 ## License
 
 Released under the [MIT License](LICENSE). Copyright © 2026 [Khaled Sameer](https://github.com/KhaledSMQ).
@@ -232,6 +243,6 @@ Released under the [MIT License](LICENSE). Copyright © 2026 [Khaled Sameer](htt
 
 Built with 🦀 Rust · Fully offline · Token-compact by design
 
-[Documentation](docs/README.md) · [Releases](https://github.com/KhaledSMQ/greplm/releases) · [Report a bug](https://github.com/KhaledSMQ/greplm/issues)
+[Documentation](docs/README.md) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/KhaledSMQ/greplm/releases) · [Report a bug](https://github.com/KhaledSMQ/greplm/issues)
 
 </div>

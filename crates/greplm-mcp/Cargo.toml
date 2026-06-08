@@ -14,7 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.102"
-greplm-core = { path = "../greplm-core", version = "0.1.0" }
+greplm-core = { workspace = true }
 rmcp = { version = "1.7.0", features = ["server", "transport-io", "macros"] }
 schemars = "1.2.1"
 serde = { version = "1.0.228", features = ["derive"] }
