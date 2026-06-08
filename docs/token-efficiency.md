@@ -1,6 +1,17 @@
 # Token efficiency
 
-greplm exists to keep coding agents off the "grep, then read whole files" treadmill
+A coding agent that wants to know "where is `SegmentWriter` used?" greps, then reads every
+matching file in full to find a few lines. On this repo that's 12 files and ~22,700 tokens.
+greplm answers from its index and returns the same 12 files in **474 tokens** — 97.9% fewer:
+
+```
+"Where is SegmentWriter used?"
+
+  grep + read whole files →  12 files,  ~22,700 tokens
+  greplm search           →  12 files,      474 tokens   ·  97.9% fewer
+```
+
+That's the whole idea. greplm keeps agents off the "grep, then read whole files" treadmill
 that burns context. Every query returns compact locations (and, for `snippet`, an exact
 slice) instead of file bodies, so the agent pulls in a few lines rather than thousands.
 

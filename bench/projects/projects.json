@@ -1,0 +1,37 @@
+{
+  "_about": "Multi-project benchmark config. Roots are local checkouts; edit them to your paths. The 'index' block records the one-time `greplm index --force` build (files indexed, symbols extracted, wall-clock seconds, on-disk index size) so the report can show indexing cost alongside query savings.",
+  "defaults": {
+    "k": 20000,
+    "max_per_file": 1,
+    "budget": 8000
+  },
+  "projects": [
+    {
+      "name": "react",
+      "label": "React (facebook/react)",
+      "root": "~/workspace/github/react",
+      "language": "JavaScript / TypeScript",
+      "queries": "react.queries.json",
+      "tasks": "react.tasks.json",
+      "index": { "files": 6723, "symbols": 22491, "seconds": 1.97, "size": "38M" }
+    },
+    {
+      "name": "odoo18",
+      "label": "Odoo 18 (ERP)",
+      "root": "~/workspace/stoneslane/Github/ERP/odoo18/odoo",
+      "language": "Python / JS / XML",
+      "queries": "odoo.queries.json",
+      "tasks": "odoo.tasks.json",
+      "index": { "files": 41142, "symbols": 97844, "seconds": 19.75, "size": "176M" }
+    },
+    {
+      "name": "linux",
+      "label": "Linux kernel",
+      "root": "~/workspace/github/linux",
+      "language": "C",
+      "queries": "linux.queries.json",
+      "tasks": "linux.tasks.json",
+      "index": { "files": 93362, "symbols": 3297692, "seconds": 66.48, "size": "1.0G" }
+    }
+  ]
+}

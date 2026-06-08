@@ -1,0 +1,626 @@
+[
+  {
+    "name": "react",
+    "label": "React (facebook/react)",
+    "language": "JavaScript / TypeScript",
+    "root": "/Users/khaled/workspace/github/react",
+    "index": {
+      "files": 6723,
+      "symbols": 22491,
+      "seconds": 1.97,
+      "size": "38M"
+    },
+    "search": {
+      "greplm": "/Users/khaled/workspace/Github/greplm/target/release/greplm",
+      "root": "/Users/khaled/workspace/github/react",
+      "k": 20000,
+      "rows": [
+        {
+          "id": "use-state",
+          "query": "useState",
+          "rg_files": 719,
+          "greplm_files": 719,
+          "recall": 1.0,
+          "baseline_tokens": 1681874.5,
+          "greplm_tokens": 11343.25,
+          "saved_pct": 99.32555907114353,
+          "rg_ms": 224.44712498690933,
+          "greplm_ms": 74.95866599492729
+        },
+        {
+          "id": "use-effect",
+          "query": "useEffect",
+          "rg_files": 443,
+          "greplm_files": 443,
+          "recall": 1.0,
+          "baseline_tokens": 1609944.0,
+          "greplm_tokens": 5735.75,
+          "saved_pct": 99.64372984401942,
+          "rg_ms": 99.0014590206556,
+          "greplm_ms": 65.77295804163441
+        },
+        {
+          "id": "use-memo",
+          "query": "useMemo",
+          "rg_files": 488,
+          "greplm_files": 488,
+          "recall": 1.0,
+          "baseline_tokens": 960792.75,
+          "greplm_tokens": 5531.75,
+          "saved_pct": 99.4242514839959,
+          "rg_ms": 97.58445800980553,
+          "greplm_ms": 66.49574998300523
+        },
+        {
+          "id": "use-context",
+          "query": "useContext",
+          "rg_files": 213,
+          "greplm_files": 213,
+          "recall": 1.0,
+          "baseline_tokens": 945588.5,
+          "greplm_tokens": 3667.25,
+          "saved_pct": 99.61217273687232,
+          "rg_ms": 96.19479195680469,
+          "greplm_ms": 63.35858296370134
+        },
+        {
+          "id": "use-reducer",
+          "query": "useReducer",
+          "rg_files": 84,
+          "greplm_files": 84,
+          "recall": 1.0,
+          "baseline_tokens": 556646.0,
+          "greplm_tokens": 1101.0,
+          "saved_pct": 99.80220822569461,
+          "rg_ms": 94.12174997851253,
+          "greplm_ms": 61.39133300166577
+        },
+        {
+          "id": "use-transition",
+          "query": "useTransition",
+          "rg_files": 60,
+          "greplm_files": 60,
+          "recall": 1.0,
+          "baseline_tokens": 526790.25,
+          "greplm_tokens": 836.5,
+          "saved_pct": 99.84120814688579,
+          "rg_ms": 92.18441700795665,
+          "greplm_ms": 61.463541991543025
+        },
+        {
+          "id": "suspense",
+          "query": "Suspense",
+          "rg_files": 294,
+          "greplm_files": 294,
+          "recall": 1.0,
+          "baseline_tokens": 2205952.25,
+          "greplm_tokens": 3534.75,
+          "saved_pct": 99.83976307737396,
+          "rg_ms": 92.78141701361164,
+          "greplm_ms": 62.540165963582695
+        },
+        {
+          "id": "create-element",
+          "query": "createElement",
+          "rg_files": 407,
+          "greplm_files": 407,
+          "recall": 1.0,
+          "baseline_tokens": 1980988.0,
+          "greplm_tokens": 6415.75,
+          "saved_pct": 99.67613382817059,
+          "rg_ms": 94.7692499612458,
+          "greplm_ms": 65.62208401737735
+        },
+        {
+          "id": "flush-sync",
+          "query": "flushSync",
+          "rg_files": 92,
+          "greplm_files": 92,
+          "recall": 1.0,
+          "baseline_tokens": 870100.75,
+          "greplm_tokens": 1053.25,
+          "saved_pct": 99.87895079966314,
+          "rg_ms": 93.42750004725531,
+          "greplm_ms": 59.87050000112504
+        },
+        {
+          "id": "scheduler",
+          "query": "Scheduler",
+          "rg_files": 211,
+          "greplm_files": 211,
+          "recall": 1.0,
+          "baseline_tokens": 1639216.75,
+          "greplm_tokens": 1744.0,
+          "saved_pct": 99.89360772454283,
+          "rg_ms": 93.34533399669454,
+          "greplm_ms": 61.31670798640698
+        }
+      ],
+      "summary": {
+        "baseline_tokens": 12977893.75,
+        "greplm_tokens": 40963.25,
+        "saved_pct": 99.68436133945079,
+        "mean_recall": 1.0,
+        "greplm_ms": 64.27902899449691,
+        "rg_ms": 107.78575019794516
+      }
+    },
+    "pack": {
+      "root": "/Users/khaled/workspace/github/react",
+      "budget": 8000,
+      "rows": [
+        {
+          "id": "use-state-internals",
+          "task": "how does the useState hook store and update component state",
+          "items": 187,
+          "files": 54,
+          "baseline_tokens": 469085.5,
+          "pack_tokens": 8064.25,
+          "saved_pct": 98.28085711453456
+        },
+        {
+          "id": "effect-scheduling",
+          "task": "how are effects scheduled and flushed after commit",
+          "items": 43,
+          "files": 13,
+          "baseline_tokens": 177104.75,
+          "pack_tokens": 8012.75,
+          "saved_pct": 95.47570011532723
+        },
+        {
+          "id": "reconcile-children",
+          "task": "how does the reconciler diff and reconcile children",
+          "items": 28,
+          "files": 21,
+          "baseline_tokens": 264117.25,
+          "pack_tokens": 8006.25,
+          "saved_pct": 96.96867584377772
+        },
+        {
+          "id": "suspense-pending",
+          "task": "how does Suspense handle a thrown pending promise",
+          "items": 101,
+          "files": 72,
+          "baseline_tokens": 409476.75,
+          "pack_tokens": 8016.75,
+          "saved_pct": 98.04219653496811
+        },
+        {
+          "id": "scheduler-priority",
+          "task": "how does the scheduler prioritize and time-slice work",
+          "items": 61,
+          "files": 27,
+          "baseline_tokens": 206015.0,
+          "pack_tokens": 8022.5,
+          "saved_pct": 96.10586607771279
+        }
+      ],
+      "summary": {
+        "baseline_tokens": 1525799.25,
+        "pack_tokens": 40122.5,
+        "saved_pct": 97.3703945653401
+      }
+    },
+    "warm": {
+      "median_ms": 9.273270989069715,
+      "min_ms": 5.812791991047561,
+      "max_ms": 13.881709019187838
+    }
+  },
+  {
+    "name": "odoo18",
+    "label": "Odoo 18 (ERP)",
+    "language": "Python / JS / XML",
+    "root": "/Users/khaled/workspace/stoneslane/Github/ERP/odoo18/odoo",
+    "index": {
+      "files": 41142,
+      "symbols": 97844,
+      "seconds": 19.75,
+      "size": "176M"
+    },
+    "search": {
+      "greplm": "/Users/khaled/workspace/Github/greplm/target/release/greplm",
+      "root": "/Users/khaled/workspace/stoneslane/Github/ERP/odoo18/odoo",
+      "k": 20000,
+      "rows": [
+        {
+          "id": "search-read",
+          "query": "search_read",
+          "rg_files": 250,
+          "greplm_files": 250,
+          "recall": 1.0,
+          "baseline_tokens": 2261250.75,
+          "greplm_tokens": 4721.0,
+          "saved_pct": 99.79122173867715,
+          "rg_ms": 1438.7760419631377,
+          "greplm_ms": 310.0400000112131
+        },
+        {
+          "id": "transient-model",
+          "query": "TransientModel",
+          "rg_files": 427,
+          "greplm_files": 427,
+          "recall": 1.0,
+          "baseline_tokens": 656189.75,
+          "greplm_tokens": 5341.25,
+          "saved_pct": 99.1860205070256,
+          "rg_ms": 1075.4528749966994,
+          "greplm_ms": 261.95712498156354
+        },
+        {
+          "id": "abstract-model",
+          "query": "AbstractModel",
+          "rg_files": 459,
+          "greplm_files": 459,
+          "recall": 1.0,
+          "baseline_tokens": 994033.5,
+          "greplm_tokens": 5297.0,
+          "saved_pct": 99.46712057491021,
+          "rg_ms": 1055.0756659940816,
+          "greplm_ms": 260.0616250419989
+        },
+        {
+          "id": "ondelete",
+          "query": "ondelete",
+          "rg_files": 591,
+          "greplm_files": 591,
+          "recall": 1.0,
+          "baseline_tokens": 24056737.0,
+          "greplm_tokens": 9968.0,
+          "saved_pct": 99.95856462162762,
+          "rg_ms": 1067.3179170116782,
+          "greplm_ms": 322.2383329994045
+        },
+        {
+          "id": "onchange",
+          "query": "onchange",
+          "rg_files": 762,
+          "greplm_files": 762,
+          "recall": 1.0,
+          "baseline_tokens": 8068915.0,
+          "greplm_tokens": 11420.5,
+          "saved_pct": 99.8584630027705,
+          "rg_ms": 1149.0937079652213,
+          "greplm_ms": 290.8332499791868
+        },
+        {
+          "id": "api-depends",
+          "query": "api.depends",
+          "rg_files": 902,
+          "greplm_files": 902,
+          "recall": 1.0,
+          "baseline_tokens": 3176764.25,
+          "greplm_tokens": 10724.25,
+          "saved_pct": 99.66241593155677,
+          "rg_ms": 979.0161669952795,
+          "greplm_ms": 266.34220901178196
+        },
+        {
+          "id": "many2one",
+          "query": "fields.Many2one",
+          "rg_files": 1093,
+          "greplm_files": 1093,
+          "recall": 1.0,
+          "baseline_tokens": 4247076.0,
+          "greplm_tokens": 20870.0,
+          "saved_pct": 99.50860309540023,
+          "rg_ms": 1075.224625004921,
+          "greplm_ms": 268.1309579638764
+        },
+        {
+          "id": "registry",
+          "query": "registry",
+          "rg_files": 1784,
+          "greplm_files": 1784,
+          "recall": 1.0,
+          "baseline_tokens": 36844319.5,
+          "greplm_tokens": 24717.5,
+          "saved_pct": 99.93291367479321,
+          "rg_ms": 1005.4485839791596,
+          "greplm_ms": 334.5713749877177
+        },
+        {
+          "id": "models-model",
+          "query": "models.Model",
+          "rg_files": 2302,
+          "greplm_files": 2302,
+          "recall": 1.0,
+          "baseline_tokens": 5285476.5,
+          "greplm_tokens": 20164.75,
+          "saved_pct": 99.6184875668258,
+          "rg_ms": 967.1739590121433,
+          "greplm_ms": 294.3643330363557
+        },
+        {
+          "id": "res-partner",
+          "query": "res.partner",
+          "rg_files": 1830,
+          "greplm_files": 1830,
+          "recall": 1.0,
+          "baseline_tokens": 36074689.5,
+          "greplm_tokens": 31851.25,
+          "saved_pct": 99.91170748676853,
+          "rg_ms": 1014.6254579885863,
+          "greplm_ms": 310.3701659711078
+        }
+      ],
+      "summary": {
+        "baseline_tokens": 121665451.75,
+        "greplm_tokens": 145075.5,
+        "saved_pct": 99.88075867231554,
+        "mean_recall": 1.0,
+        "greplm_ms": 291.89093739842065,
+        "rg_ms": 1082.7205000910908
+      }
+    },
+    "pack": {
+      "root": "/Users/khaled/workspace/stoneslane/Github/ERP/odoo18/odoo",
+      "budget": 8000,
+      "rows": [
+        {
+          "id": "computed-fields",
+          "task": "how are computed fields recomputed when their dependencies change",
+          "items": 34,
+          "files": 24,
+          "baseline_tokens": 1543216.25,
+          "pack_tokens": 8009.0,
+          "saved_pct": 99.48101894339176
+        },
+        {
+          "id": "search-read",
+          "task": "how does the ORM execute a search_read query",
+          "items": 57,
+          "files": 41,
+          "baseline_tokens": 944099.0,
+          "pack_tokens": 8018.0,
+          "saved_pct": 99.1507246591724
+        },
+        {
+          "id": "onchange",
+          "task": "how are onchange methods triggered on a form view",
+          "items": 37,
+          "files": 29,
+          "baseline_tokens": 473497.0,
+          "pack_tokens": 8010.25,
+          "saved_pct": 98.30827861633759
+        },
+        {
+          "id": "model-inherit",
+          "task": "how does model inheritance with _inherit extend an existing model",
+          "items": 33,
+          "files": 25,
+          "baseline_tokens": 1677320.25,
+          "pack_tokens": 8010.5,
+          "saved_pct": 99.5224227454477
+        },
+        {
+          "id": "record-rules",
+          "task": "how are record rules applied for access control",
+          "items": 39,
+          "files": 34,
+          "baseline_tokens": 860316.25,
+          "pack_tokens": 8014.75,
+          "saved_pct": 99.06839490710539
+        }
+      ],
+      "summary": {
+        "baseline_tokens": 5498448.75,
+        "pack_tokens": 40062.5,
+        "saved_pct": 99.27138540665675
+      }
+    },
+    "warm": {
+      "median_ms": 32.566500012762845,
+      "min_ms": 12.40866701118648,
+      "max_ms": 310.94037502771243
+    }
+  },
+  {
+    "name": "linux",
+    "label": "Linux kernel",
+    "language": "C",
+    "root": "/Users/khaled/workspace/github/linux",
+    "index": {
+      "files": 93362,
+      "symbols": 3297692,
+      "seconds": 66.48,
+      "size": "1.0G"
+    },
+    "search": {
+      "greplm": "/Users/khaled/workspace/Github/greplm/target/release/greplm",
+      "root": "/Users/khaled/workspace/github/linux",
+      "k": 20000,
+      "rows": [
+        {
+          "id": "try-to-wake-up",
+          "query": "try_to_wake_up",
+          "rg_files": 26,
+          "greplm_files": 26,
+          "recall": 1.0,
+          "baseline_tokens": 438153.0,
+          "greplm_tokens": 426.0,
+          "saved_pct": 99.90277368864301,
+          "rg_ms": 1779.0654589771293,
+          "greplm_ms": 2959.4552500057034
+        },
+        {
+          "id": "vfs-read",
+          "query": "vfs_read",
+          "rg_files": 41,
+          "greplm_files": 41,
+          "recall": 1.0,
+          "baseline_tokens": 484101.25,
+          "greplm_tokens": 573.0,
+          "saved_pct": 99.88163633124269,
+          "rg_ms": 1644.7384579805657,
+          "greplm_ms": 2784.036833967548
+        },
+        {
+          "id": "kobject-init",
+          "query": "kobject_init",
+          "rg_files": 119,
+          "greplm_files": 119,
+          "recall": 1.0,
+          "baseline_tokens": 1203748.25,
+          "greplm_tokens": 1702.0,
+          "saved_pct": 99.85860830950325,
+          "rg_ms": 2086.8519169744104,
+          "greplm_ms": 2718.703084043227
+        },
+        {
+          "id": "schedule-timeout",
+          "query": "schedule_timeout",
+          "rg_files": 418,
+          "greplm_files": 418,
+          "recall": 1.0,
+          "baseline_tokens": 5717654.25,
+          "greplm_tokens": 4570.0,
+          "saved_pct": 99.92007211698748,
+          "rg_ms": 2120.0357080087997,
+          "greplm_ms": 2734.0853329515085
+        },
+        {
+          "id": "register-netdev",
+          "query": "register_netdev",
+          "rg_files": 569,
+          "greplm_files": 569,
+          "recall": 1.0,
+          "baseline_tokens": 8080445.25,
+          "greplm_tokens": 5676.75,
+          "saved_pct": 99.92974706437123,
+          "rg_ms": 2299.560042039957,
+          "greplm_ms": 2680.0927920266986
+        },
+        {
+          "id": "dma-alloc-coherent",
+          "query": "dma_alloc_coherent",
+          "rg_files": 842,
+          "greplm_files": 842,
+          "recall": 1.0,
+          "baseline_tokens": 12766059.75,
+          "greplm_tokens": 12750.0,
+          "saved_pct": 99.90012580036687,
+          "rg_ms": 2301.3934579794295,
+          "greplm_ms": 2722.3638750147074
+        },
+        {
+          "id": "copy-to-user",
+          "query": "copy_to_user",
+          "rg_files": 1164,
+          "greplm_files": 1164,
+          "recall": 1.0,
+          "baseline_tokens": 10546973.75,
+          "greplm_tokens": 16213.0,
+          "saved_pct": 99.84627818003244,
+          "rg_ms": 2741.1534169805236,
+          "greplm_ms": 2801.1140839662403
+        },
+        {
+          "id": "file-operations",
+          "query": "file_operations",
+          "rg_files": 1517,
+          "greplm_files": 1516,
+          "recall": 0.999340804218853,
+          "baseline_tokens": 12275907.75,
+          "greplm_tokens": 20890.0,
+          "saved_pct": 99.82982928492599,
+          "rg_ms": 2571.7347920290194,
+          "greplm_ms": 2985.7295000110753
+        },
+        {
+          "id": "rcu-read-lock",
+          "query": "rcu_read_lock",
+          "rg_files": 1712,
+          "greplm_files": 1696,
+          "recall": 0.9906542056074766,
+          "baseline_tokens": 22068367.25,
+          "greplm_tokens": 10814.0,
+          "saved_pct": 99.95099773409834,
+          "rg_ms": 2990.188625000883,
+          "greplm_ms": 2883.9180000359192
+        },
+        {
+          "id": "task-struct",
+          "query": "task_struct",
+          "rg_files": 1734,
+          "greplm_files": 1730,
+          "recall": 0.9976931949250288,
+          "baseline_tokens": 10443135.5,
+          "greplm_tokens": 20877.0,
+          "saved_pct": 99.80008877601942,
+          "rg_ms": 2695.8315409719944,
+          "greplm_ms": 2849.366791022476
+        }
+      ],
+      "summary": {
+        "baseline_tokens": 84024546.0,
+        "greplm_tokens": 94491.75,
+        "saved_pct": 99.88754268306312,
+        "mean_recall": 0.9987688204751357,
+        "greplm_ms": 2811.8865543045104,
+        "rg_ms": 2323.055341694271
+      }
+    },
+    "pack": {
+      "root": "/Users/khaled/workspace/github/linux",
+      "budget": 8000,
+      "rows": [
+        {
+          "id": "scheduler-pick-next",
+          "task": "how does the scheduler pick the next task to run",
+          "items": 43,
+          "files": 23,
+          "baseline_tokens": 552118.25,
+          "pack_tokens": 8014.25,
+          "saved_pct": 98.54845406758426
+        },
+        {
+          "id": "skb-alloc",
+          "task": "how is a socket buffer sk_buff allocated and freed",
+          "items": 266,
+          "files": 49,
+          "baseline_tokens": 593411.5,
+          "pack_tokens": 8102.5,
+          "saved_pct": 98.63458999362163
+        },
+        {
+          "id": "copy-to-user",
+          "task": "how does copy_to_user safely move data to userspace",
+          "items": 71,
+          "files": 34,
+          "baseline_tokens": 391920.0,
+          "pack_tokens": 8023.5,
+          "saved_pct": 97.9527709736681
+        },
+        {
+          "id": "workqueue",
+          "task": "how are workqueues created and work items scheduled",
+          "items": 111,
+          "files": 46,
+          "baseline_tokens": 637220.75,
+          "pack_tokens": 8035.25,
+          "saved_pct": 98.73901626712563
+        },
+        {
+          "id": "kmalloc",
+          "task": "how does kmalloc allocate kernel memory from slab caches",
+          "items": 42,
+          "files": 29,
+          "baseline_tokens": 328199.5,
+          "pack_tokens": 8017.0,
+          "saved_pct": 97.55727842364172
+        }
+      ],
+      "summary": {
+        "baseline_tokens": 2502870.0,
+        "pack_tokens": 40192.5,
+        "saved_pct": 98.39414352323533
+      }
+    },
+    "warm": {
+      "median_ms": 31.32629199535586,
+      "min_ms": 11.160125024616718,
+      "max_ms": 61.055666010361165
+    }
+  }
+]

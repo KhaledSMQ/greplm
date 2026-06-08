@@ -1,0 +1,15 @@
+{
+  "_about": "Real-world identifiers a coding agent would grep for in the Odoo 18 source tree. Each genuinely occurs in the repo; ripgrep is the grep+read-whole-files ground truth.",
+  "queries": [
+    { "id": "search-read",      "query": "search_read" },
+    { "id": "transient-model",  "query": "TransientModel" },
+    { "id": "abstract-model",   "query": "AbstractModel" },
+    { "id": "ondelete",         "query": "ondelete" },
+    { "id": "onchange",         "query": "onchange" },
+    { "id": "api-depends",      "query": "api.depends" },
+    { "id": "many2one",         "query": "fields.Many2one" },
+    { "id": "registry",         "query": "registry" },
+    { "id": "models-model",     "query": "models.Model" },
+    { "id": "res-partner",      "query": "res.partner" }
+  ]
+}

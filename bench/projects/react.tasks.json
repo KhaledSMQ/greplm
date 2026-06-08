@@ -1,0 +1,9 @@
+{
+  "tasks": [
+    { "id": "use-state-internals", "task": "how does the useState hook store and update component state" },
+    { "id": "effect-scheduling", "task": "how are effects scheduled and flushed after commit" },
+    { "id": "reconcile-children", "task": "how does the reconciler diff and reconcile children" },
+    { "id": "suspense-pending", "task": "how does Suspense handle a thrown pending promise" },
+    { "id": "scheduler-priority", "task": "how does the scheduler prioritize and time-slice work" }
+  ]
+}

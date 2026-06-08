@@ -1,6 +1,12 @@
 # greplm documentation
 
-greplm is a fast, offline code search and code intelligence tool built for LLM agents. It indexes your project locally and returns compact, token-efficient results — search, symbols, call graphs, go-to-definition, AST search, git history, and context packs.
+greplm keeps coding agents off the "grep, then read whole files" treadmill that burns their
+context window. It indexes your project locally, then answers search, symbols, call graphs,
+go-to-definition, AST search, git history, and context-pack queries in milliseconds — returning
+the exact lines that matter instead of file bodies, fully offline.
+
+New here? Start with **[Getting started](getting-started.md)**, then teach your agent to reach
+for greplm with **[Use it from your agent](mcp.md)**.
 
 ## Guides
 

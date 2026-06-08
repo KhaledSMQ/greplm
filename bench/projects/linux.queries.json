@@ -1,0 +1,15 @@
+{
+  "_about": "Real-world identifiers a coding agent would grep for in the Linux kernel source tree. Each genuinely occurs in the repo; ripgrep is the grep+read-whole-files ground truth.",
+  "queries": [
+    { "id": "try-to-wake-up",      "query": "try_to_wake_up" },
+    { "id": "vfs-read",            "query": "vfs_read" },
+    { "id": "kobject-init",        "query": "kobject_init" },
+    { "id": "schedule-timeout",    "query": "schedule_timeout" },
+    { "id": "register-netdev",     "query": "register_netdev" },
+    { "id": "dma-alloc-coherent",  "query": "dma_alloc_coherent" },
+    { "id": "copy-to-user",        "query": "copy_to_user" },
+    { "id": "file-operations",     "query": "file_operations" },
+    { "id": "rcu-read-lock",       "query": "rcu_read_lock" },
+    { "id": "task-struct",         "query": "task_struct" }
+  ]
+}

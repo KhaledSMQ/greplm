@@ -2,8 +2,9 @@
 
 ## Why greplm?
 
-greplm is built specifically for the agent loop — small, structured results over a hot local
-index — rather than for humans scrolling a terminal.
+Every other code-search tool is built for a human scrolling a terminal. greplm is built for
+the agent loop: small, structured, token-compact results over a hot local index — the kind a
+program can hammer thousands of times a session without drowning in file text.
 
 | | greplm | `ripgrep` | `ctags` / LSP |
 |---|---|---|---|
@@ -23,8 +24,8 @@ index — rather than for humans scrolling a terminal.
 | MCP server + ready-made agent files | ✅ | ❌ | ❌ |
 | Fully offline / no network | ✅ | ✅ | ✅ |
 
-If you just want fast interactive grep, use ripgrep. If you want a queryable index an agent can
-hammer thousands of times without re-scanning the tree, use greplm.
+Reach for ripgrep when *you* are scanning a terminal. Reach for greplm when an *agent* needs a
+queryable index it can hammer thousands of times without re-scanning the tree.
 
 ## Features
 

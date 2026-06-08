@@ -87,9 +87,13 @@ def file_chars(root, rel):
         return 0
 
 
-def run_ripgrep(query, root):
+def run_ripgrep(query, root, fixed_strings=False):
     """Files matching `query` (ground truth) plus how long the search took."""
     cmd = ["rg", "--files-with-matches", "--no-messages"]
+    if fixed_strings:
+        # Match greplm's literal-by-default search so the two engines look for
+        # the same string (e.g. `res.partner` is not a regex on either side).
+        cmd.append("--fixed-strings")
     for ex in EXCLUDES:
         cmd += ["--glob", f"!{ex}/**"]
     cmd += ["--", query, "."]
@@ -103,10 +107,12 @@ def run_ripgrep(query, root):
     return files, dt
 
 
-def run_greplm(greplm, query, root, k):
+def run_greplm(greplm, query, root, k, max_per_file=None):
     """greplm's hits (compact payload) plus how long the cold search took."""
     cmd = [greplm, "search", query, "--no-daemon", "-C", root,
            "--limit", str(k), "--json"]
+    if max_per_file is not None:
+        cmd += ["--max-per-file", str(max_per_file)]
     t = time.perf_counter()
     out = subprocess.run(cmd, capture_output=True, text=True)
     dt = time.perf_counter() - t
@@ -137,6 +143,13 @@ def main():
                     help="repo to search (default: the greplm repo itself)")
     ap.add_argument("--k", type=int, default=500,
                     help="max greplm hits per query (default: 500)")
+    ap.add_argument("--max-per-file", type=int, default=None,
+                    help="cap greplm hits per file (keeps recall fair on huge "
+                         "repos where one query matches thousands of files)")
+    ap.add_argument("--fixed-strings", action="store_true",
+                    help="run ripgrep in literal (-F) mode to match greplm's "
+                         "literal-by-default search (fair recall for queries "
+                         "containing regex metacharacters like '.')")
     ap.add_argument("--queries", default=os.path.join(HERE, "queries.json"))
     ap.add_argument("--out", help="optional path to write a JSON results file")
     args = ap.parse_args()
@@ -162,8 +175,9 @@ def main():
     tot_base = tot_ret = 0.0
     recalls, gl_lats, rg_lats = [], [], []
     for q in queries:
-        rg_files, rg_dt = run_ripgrep(q["query"], root)
-        gl_files, gl_chars, gl_dt = run_greplm(greplm, q["query"], root, args.k)
+        rg_files, rg_dt = run_ripgrep(q["query"], root, args.fixed_strings)
+        gl_files, gl_chars, gl_dt = run_greplm(
+            greplm, q["query"], root, args.k, args.max_per_file)
 
         base_tokens = sum(file_chars(root, f) for f in rg_files) / CHARS_PER_TOKEN
         ret_tokens = gl_chars / CHARS_PER_TOKEN

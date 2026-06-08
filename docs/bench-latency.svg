@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 342" width="900" height="342" font-family="Inter,sans-serif">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#8B5CF6"/>
+      <stop offset="100%" stop-color="#3B82F6"/>
+    </linearGradient>
+    <style>
+      .title { font: 700 22px 'Inter',-apple-system,Segoe UI,sans-serif; fill:#0F172A; }
+      .sub   { font: 400 13px 'Inter',-apple-system,Segoe UI,sans-serif; fill:#64748B; }
+      .lab   { font: 700 15px 'Inter',-apple-system,Segoe UI,sans-serif; fill:#0F172A; }
+      .lang  { font: 400 11px 'Inter',-apple-system,Segoe UI,sans-serif; fill:#94A3B8; }
+      .val   { font: 600 12px 'JetBrains Mono','Fira Code',monospace; fill:#475569; }
+      .glval { font: 700 12px 'JetBrains Mono','Fira Code',monospace; fill:#059669; }
+      .pct   { font: 800 15px 'Inter',-apple-system,sans-serif; fill:#fff; }
+      .track { fill:#E2E8F0; }
+      .gl    { fill:#10B981; }
+      .pill  { fill:url(#g); }
+      .axis  { stroke:#E2E8F0; stroke-width:1; }
+      @media (prefers-color-scheme: dark) {
+        .title,.lab { fill:#F8FAFC; } .sub { fill:#94A3B8; }
+        .val { fill:#CBD5E1; } .track { fill:#334155; } .axis { stroke:#334155; }
+      }
+    </style>
+  </defs>
+
+<rect width="900" height="342" fill="none"/>
+<text x="175" y="38" class="title">Warm query latency</text>
+<text x="175" y="60" class="sub">Median time per query — greplm (index built once, kept hot) vs ripgrep re-scanning the tree. Lower is better.</text>
+<text x="20" y="126" class="lab">React</text>
+<rect x="175" y="100" width="26.3" height="20" rx="4" class="track"/>
+<text x="209.3" y="115" class="val">ripgrep 108 ms</text>
+<rect x="175" y="126" width="4.0" height="20" rx="4" class="gl"/>
+<text x="187.0" y="141" class="glval">greplm 9 ms · 12× faster</text>
+<text x="20" y="196" class="lab">Odoo 18</text>
+<rect x="175" y="170" width="264.2" height="20" rx="4" class="track"/>
+<text x="447.2" y="185" class="val">ripgrep 1083 ms</text>
+<rect x="175" y="196" width="7.9" height="20" rx="4" class="gl"/>
+<text x="190.9" y="211" class="glval">greplm 33 ms · 33× faster</text>
+<text x="20" y="266" class="lab">Linux kernel</text>
+<rect x="175" y="240" width="567.0" height="20" rx="4" class="track"/>
+<text x="750.0" y="255" class="val">ripgrep 2323 ms</text>
+<rect x="175" y="266" width="7.6" height="20" rx="4" class="gl"/>
+<text x="190.6" y="281" class="glval">greplm 31 ms · 74× faster</text>
+</svg>

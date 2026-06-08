@@ -113,6 +113,7 @@ def main():
     ap.add_argument("--tasks", default=os.path.join(os.path.dirname(__file__), "tasks.json"))
     ap.add_argument("--tasks-inline", nargs="*",
                     help="Use these task strings directly instead of a JSON file.")
+    ap.add_argument("--out", help="optional path to write a JSON results file")
     args = ap.parse_args()
 
     root = os.path.abspath(os.path.expanduser(args.root))
@@ -124,6 +125,7 @@ def main():
     print("-" * len(hdr))
 
     agg_base = agg_pack = 0.0
+    rows = []
     for t in tasks:
         pack = run_pack(t["task"], root, args.budget)
         if not pack:
@@ -135,6 +137,11 @@ def main():
         agg_base += baseline
         agg_pack += returned
         pct = (1 - returned / baseline) * 100 if baseline else 0.0
+        rows.append({
+            "id": t["id"], "task": t["task"], "items": len(items),
+            "files": len(files), "baseline_tokens": baseline,
+            "pack_tokens": returned, "saved_pct": pct,
+        })
         print(f"{str(t['id'])[:40]:<40} {len(items):>5} "
               f"{human(baseline):>9} {human(returned):>7} {pct:>6.1f}%")
 
@@ -144,6 +151,17 @@ def main():
     print(f"baseline={human(agg_base)} tokens  pack={human(agg_pack)} tokens  "
           f"saved={human(saved)} ({pct:.1f}% fewer)")
     print("baseline = read whole files the pack drew from; pack = snippets+signatures returned.")
+
+    if args.out:
+        with open(args.out, "w") as fh:
+            json.dump({
+                "root": root, "budget": args.budget, "rows": rows,
+                "summary": {
+                    "baseline_tokens": agg_base, "pack_tokens": agg_pack,
+                    "saved_pct": pct,
+                },
+            }, fh, indent=2)
+        print(f"\nwrote {args.out}")
 
 
 if __name__ == "__main__":

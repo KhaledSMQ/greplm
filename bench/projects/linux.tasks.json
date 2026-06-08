@@ -1,0 +1,9 @@
+{
+  "tasks": [
+    { "id": "scheduler-pick-next", "task": "how does the scheduler pick the next task to run" },
+    { "id": "skb-alloc", "task": "how is a socket buffer sk_buff allocated and freed" },
+    { "id": "copy-to-user", "task": "how does copy_to_user safely move data to userspace" },
+    { "id": "workqueue", "task": "how are workqueues created and work items scheduled" },
+    { "id": "kmalloc", "task": "how does kmalloc allocate kernel memory from slab caches" }
+  ]
+}

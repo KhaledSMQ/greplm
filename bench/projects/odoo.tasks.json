@@ -1,0 +1,9 @@
+{
+  "tasks": [
+    { "id": "computed-fields", "task": "how are computed fields recomputed when their dependencies change" },
+    { "id": "search-read", "task": "how does the ORM execute a search_read query" },
+    { "id": "onchange", "task": "how are onchange methods triggered on a form view" },
+    { "id": "model-inherit", "task": "how does model inheritance with _inherit extend an existing model" },
+    { "id": "record-rules", "task": "how are record rules applied for access control" }
+  ]
+}

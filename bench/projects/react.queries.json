@@ -1,0 +1,15 @@
+{
+  "_about": "Real-world identifiers a coding agent would grep for in the React (facebook/react) source tree. Each genuinely occurs in the repo; ripgrep is the grep+read-whole-files ground truth.",
+  "queries": [
+    { "id": "use-state",        "query": "useState" },
+    { "id": "use-effect",       "query": "useEffect" },
+    { "id": "use-memo",         "query": "useMemo" },
+    { "id": "use-context",      "query": "useContext" },
+    { "id": "use-reducer",      "query": "useReducer" },
+    { "id": "use-transition",   "query": "useTransition" },
+    { "id": "suspense",         "query": "Suspense" },
+    { "id": "create-element",   "query": "createElement" },
+    { "id": "flush-sync",       "query": "flushSync" },
+    { "id": "scheduler",        "query": "Scheduler" }
+  ]
+}

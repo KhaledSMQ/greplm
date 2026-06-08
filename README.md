@@ -2,12 +2,11 @@
 
 <img src="docs/logo.svg" alt="greplm" width="320" />
 
-**Fast, offline code search _and code intelligence_ for LLM agents.**
+**Your coding agent is reading whole files to find one function. Stop it.**
 
-Coding agents burn most of their context window grepping blind and reading whole files.
-greplm gives them a hot local index that answers in **milliseconds** and returns just the
-lines that matter — search, call graph, typed go-to-definition, AST search, git history,
-and task-scoped context packs, with token-compact output built for the agent loop.
+greplm is a hot local index for LLM agents. It answers search, call-graph, go-to-definition,
+AST, and git queries in **milliseconds** and hands back the exact lines that matter — never
+file bodies. Same answers as grep-and-read, with up to **~99% fewer tokens**, fully offline.
 
 [![Release](https://github.com/KhaledSMQ/greplm/actions/workflows/release.yml/badge.svg)](https://github.com/KhaledSMQ/greplm/actions/workflows/release.yml)
 [![crates.io](https://img.shields.io/crates/v/greplm-cli.svg)](https://crates.io/crates/greplm-cli)
@@ -19,15 +18,29 @@ and task-scoped context packs, with token-compact output built for the agent loo
 
 </div>
 
+## The problem
+
+Watch a coding agent answer "where is `SegmentWriter` used?" the only way it knows how:
+`grep`, then read every file that matched, in full, to find a handful of lines. On this
+repo that's 12 files and ~22,700 tokens to learn almost nothing. greplm answers the same
+question from a warm index and returns the same 12 files in **474 tokens** — the matching
+lines, ready to jump to:
+
+```
+"Where is SegmentWriter used?"
+
+  grep + read whole files →  12 files,  ~22,700 tokens
+  greplm search           →  12 files,      474 tokens   ·  97.9% fewer
+```
+
+Multiply that across an agent loop that runs thousands of queries and the context window
+stops being the bottleneck.
+
 ## Why greplm?
 
-When an agent does `grep`, then reads three whole files to find one function, it spends
-thousands of tokens to learn almost nothing. greplm flips that: it builds a persistent,
-incremental index once, then answers every query with compact, ready-to-jump locations —
-not file bodies.
-
-On this repo, against a `ripgrep` + read-whole-files baseline, greplm returns the **same
-files** with:
+greplm builds a persistent, incremental index once, then answers every query with compact,
+ready-to-jump locations instead of file bodies. Against a `ripgrep` + read-whole-files
+baseline on this repo, it returns the **same files** with:
 
 - **~99% fewer tokens** for content search
 - **~89% fewer tokens** for context packs
@@ -45,6 +58,30 @@ It tracks this for you — run `greplm savings` to see your own numbers:
 And it goes beyond grep: greplm understands your code well enough to walk the call graph,
 resolve typed go-to-definition, and assemble exactly the code relevant to a task — across
 **14 languages**, fully offline, nothing leaving your machine.
+
+## Real-world benchmarks
+
+We indexed three large open-source codebases and replayed the searches a coding
+agent runs all day. greplm returns the **same files** ripgrep does — for a tiny
+fraction of the tokens:
+
+![Token cost of the same searches: grep + read whole files vs greplm — ~99% fewer tokens](docs/bench-tokens.svg)
+
+The index is built once and kept warm, so every query is answered in
+milliseconds — while ripgrep re-scans the whole tree on each call:
+
+![Warm query latency: greplm daemon vs ripgrep — up to 74x faster](docs/bench-latency.svg)
+
+| Project | Files | Index once | Search tokens saved | Pack tokens saved | Recall | Warm query |
+|---------|------:|-----------:|:-------------------:|:-----------------:|:------:|-----------:|
+| React (JS/TS) | 6,723 | 2.0s | 99.7% | 97.4% | 100% | 9 ms |
+| Odoo 18 (Py/JS/XML) | 41,142 | 19.8s | 99.9% | 99.3% | 100% | 33 ms |
+| Linux kernel (C) | 93,362 | 66.5s | 99.9% | 98.4% | 100% | 31 ms |
+
+Across all three, the same content searches cost **218.7M tokens** the grep-and-read
+way versus **280.5k** with greplm. Full methodology, per-query tables, and the
+reproducible runner live in **[bench/projects](bench/projects/RESULTS.md)**
+(`python3 bench/projects/run_all.py`).
 
 ## Demo
 
@@ -92,9 +129,9 @@ Re-run `greplm index` after changes (it's incremental), or use `greplm watch` to
 
 ## Code intelligence
 
-This is where greplm leaves grep behind. It answers the questions an agent actually asks
-*before* editing: who calls this, what breaks if I change it, where is this defined, and
-*give me exactly the code for this task*.
+Search is table stakes. This is where greplm leaves grep behind — it answers the questions
+an agent actually asks *before* it edits anything: who calls this, what breaks if I change
+it, where is this defined, and *give me exactly the code for this task*.
 
 ```console
 $ greplm callers references --limit 3          # who calls this function
@@ -150,8 +187,8 @@ See the [MCP guide](docs/mcp.md) for the full list of exposed tools.
 
 ## How it compares
 
-If you just want fast interactive grep, use `ripgrep`. If you want a queryable index an agent
-can hammer thousands of times without re-scanning the tree, use greplm.
+`ripgrep` is the right tool for a human scanning a terminal. greplm is for the agent loop —
+a queryable index it can hammer thousands of times without ever re-scanning the tree.
 
 | | greplm | `ripgrep` | `ctags` / LSP |
 |---|:---:|:---:|:---:|

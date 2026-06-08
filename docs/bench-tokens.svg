@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 370" width="900" height="370" font-family="Inter,sans-serif">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#8B5CF6"/>
+      <stop offset="100%" stop-color="#3B82F6"/>
+    </linearGradient>
+    <style>
+      .title { font: 700 22px 'Inter',-apple-system,Segoe UI,sans-serif; fill:#0F172A; }
+      .sub   { font: 400 13px 'Inter',-apple-system,Segoe UI,sans-serif; fill:#64748B; }
+      .lab   { font: 700 15px 'Inter',-apple-system,Segoe UI,sans-serif; fill:#0F172A; }
+      .lang  { font: 400 11px 'Inter',-apple-system,Segoe UI,sans-serif; fill:#94A3B8; }
+      .val   { font: 600 12px 'JetBrains Mono','Fira Code',monospace; fill:#475569; }
+      .glval { font: 700 12px 'JetBrains Mono','Fira Code',monospace; fill:#059669; }
+      .pct   { font: 800 15px 'Inter',-apple-system,sans-serif; fill:#fff; }
+      .track { fill:#E2E8F0; }
+      .gl    { fill:#10B981; }
+      .pill  { fill:url(#g); }
+      .axis  { stroke:#E2E8F0; stroke-width:1; }
+      @media (prefers-color-scheme: dark) {
+        .title,.lab { fill:#F8FAFC; } .sub { fill:#94A3B8; }
+        .val { fill:#CBD5E1; } .track { fill:#334155; } .axis { stroke:#334155; }
+      }
+    </style>
+  </defs>
+
+<rect width="900" height="370" fill="none"/>
+<text x="175" y="38" class="title">Same answers, 99.9% fewer tokens</text>
+<text x="175" y="60" class="sub">Tokens to find the code behind the same searches — grep + read whole files vs greplm. Lower is better.</text>
+<text x="20" y="125" class="lab">React</text>
+<text x="20" y="141" class="lang">JavaScript / TypeScript</text>
+<rect x="175" y="114" width="475" height="26" rx="5" class="track"/>
+<rect x="175" y="114" width="5.0" height="26" rx="5" class="gl"/>
+<text x="640" y="131" text-anchor="end" class="val">13.0M tokens</text>
+<text x="188.0" y="131" class="glval">greplm 41.0k</text>
+<rect x="720" y="113" width="148" height="28" rx="14" class="pill"/>
+<text x="794" y="132" text-anchor="middle" class="pct">99.7% fewer</text>
+<text x="20" y="203" class="lab">Odoo 18</text>
+<text x="20" y="219" class="lang">Python / JS / XML</text>
+<rect x="175" y="192" width="475" height="26" rx="5" class="track"/>
+<rect x="175" y="192" width="5.0" height="26" rx="5" class="gl"/>
+<text x="640" y="209" text-anchor="end" class="val">121.7M tokens</text>
+<text x="188.0" y="209" class="glval">greplm 145.1k</text>
+<rect x="720" y="191" width="148" height="28" rx="14" class="pill"/>
+<text x="794" y="210" text-anchor="middle" class="pct">99.9% fewer</text>
+<text x="20" y="281" class="lab">Linux kernel</text>
+<text x="20" y="297" class="lang">C</text>
+<rect x="175" y="270" width="475" height="26" rx="5" class="track"/>
+<rect x="175" y="270" width="5.0" height="26" rx="5" class="gl"/>
+<text x="640" y="287" text-anchor="end" class="val">84.0M tokens</text>
+<text x="188.0" y="287" class="glval">greplm 94.5k</text>
+<rect x="720" y="269" width="148" height="28" rx="14" class="pill"/>
+<text x="794" y="288" text-anchor="middle" class="pct">99.9% fewer</text>
+<text x="175" y="354" class="sub">Across all three: 218.7M → 280.5k tokens. 100% recall (same files). tokens ≈ chars / 4.</text>
+</svg>
