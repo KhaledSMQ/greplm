@@ -1152,8 +1152,8 @@ impl Searcher {
                     code.push_str(text);
                 }
             }
-            let chars: u64 = code.len() as u64
-                + sym.signature.as_ref().map(|s| s.len() as u64).unwrap_or(0);
+            let chars: u64 =
+                code.len() as u64 + sym.signature.as_ref().map(|s| s.len() as u64).unwrap_or(0);
             let cost = context::est_tokens(chars).max(1);
             if used + cost > budget_tokens && !items.is_empty() {
                 truncated = true;
