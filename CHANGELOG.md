@@ -11,6 +11,8 @@ creates the GitHub release, and publishes the crates to crates.io (see
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-09
+
 ### Added
 
 - **Property-based equivalence tests**: the trigram-accelerated search is checked
@@ -81,7 +83,8 @@ creates the GitHub release, and publishes the crates to crates.io (see
   structural (AST) search, git time-travel, token-budgeted context packs, a warm
   query daemon, a CLI, and an MCP server — across 14 languages, fully offline.
 
-[Unreleased]: https://github.com/KhaledSMQ/greplm/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/KhaledSMQ/greplm/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/KhaledSMQ/greplm/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/KhaledSMQ/greplm/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/KhaledSMQ/greplm/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/KhaledSMQ/greplm/compare/v0.1.0...v0.1.1
