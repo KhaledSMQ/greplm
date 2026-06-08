@@ -1,6 +1,7 @@
 //! greplm command-line interface.
 
 mod agent;
+mod ops;
 
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -85,8 +86,42 @@ enum Command {
     /// Install the bundled greplm agent definition for a coding tool.
     #[command(subcommand)]
     Agent(AgentCommand),
+    /// Diagnose common problems (and with --fix, repair the safe ones).
+    Doctor(DoctorArgs),
+    /// Update greplm to the latest release.
+    Update(UpdateArgs),
+    /// First-run setup: build the index and install an always-on daemon.
+    Setup(SetupArgs),
     /// Delete the .greplm index directory.
     Clean(RootArg),
+}
+
+#[derive(Debug, Args)]
+struct DoctorArgs {
+    /// Project root (defaults to the current directory).
+    #[arg(long, short = 'C')]
+    root: Option<PathBuf>,
+    /// Repair the issues that are safe to fix automatically (build/refresh the
+    /// index, install the daemon service).
+    #[arg(long)]
+    fix: bool,
+}
+
+#[derive(Debug, Args)]
+struct UpdateArgs {
+    /// Only report whether a newer version exists; don't install it.
+    #[arg(long)]
+    check: bool,
+}
+
+#[derive(Debug, Args)]
+struct SetupArgs {
+    /// Project root (defaults to the current directory).
+    #[arg(long, short = 'C')]
+    root: Option<PathBuf>,
+    /// Build the index but do not install the always-on daemon service.
+    #[arg(long)]
+    no_daemon_service: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -569,6 +604,21 @@ fn run() -> Result<()> {
         Command::SemanticSearch(args) => cmd_semantic_search(args),
         Command::Savings(args) => cmd_savings(args),
         Command::Agent(cmd) => cmd_agent(cmd),
+        Command::Doctor(args) => {
+            let root = match args.root {
+                Some(r) => r,
+                None => cwd()?,
+            };
+            ops::doctor(&root, args.fix)
+        }
+        Command::Update(args) => ops::update(args.check),
+        Command::Setup(args) => {
+            let root = match args.root {
+                Some(r) => r,
+                None => cwd()?,
+            };
+            ops::setup(&root, !args.no_daemon_service)
+        }
         Command::Clean(args) => cmd_clean(args),
     }
 }

@@ -159,9 +159,18 @@ impl Greplm {
             seen.insert(e.rel.clone());
             let (_, mtime_ns, size) = cache::stat_key(&e.metadata);
             match existing.get(&e.rel) {
+                // Already indexed; a changed stat key means it may have changed.
                 Some(rec) if rec.size == size && rec.mtime_ns == mtime_ns => {}
-                // New file, or stat key changed.
-                _ => return Ok(true),
+                Some(_) => return Ok(true),
+                // Not in the index. It's only "dirty" if the indexer would
+                // actually index it — files it intentionally skips (binary) are
+                // never cached, so counting them would make any project with a
+                // binary file look perpetually stale.
+                None => {
+                    if self.would_index(&e.path) {
+                        return Ok(true);
+                    }
+                }
             }
         }
         // A previously indexed file that disappeared (or became un-indexable,
@@ -172,6 +181,16 @@ impl Greplm {
             }
         }
         Ok(false)
+    }
+
+    /// Would the indexer index this not-yet-cached file, or skip it the way its
+    /// read stage does (binary content, unreadable)? Mirrors `indexer::process`
+    /// so [`is_dirty`](Self::is_dirty) doesn't flag intentionally-skipped files.
+    fn would_index(&self, path: &Path) -> bool {
+        match std::fs::read(path) {
+            Ok(data) => self.config.index_binary || memchr::memchr(0, &data).is_none(),
+            Err(_) => false,
+        }
     }
 
     /// Merge all segments into a single compact segment, dropping tombstoned
