@@ -41,3 +41,15 @@ Cursor / Claude Desktop style `mcp.json`:
 
 The first argument sets the project root (defaults to the working directory). All diagnostics go to
 stderr; stdout carries only the protocol stream.
+
+## Output format
+
+Tool results are returned as **compact JSON** (single-line, no pretty-print indentation) — the
+consumer is an LLM, so every byte of whitespace would be wasted context.
+
+Code snippets are encoded as a single text blob rather than an array of per-line objects:
+`read_snippet` returns `{ path, start_line, end_line, total_lines, text }` and each
+`build_context` item returns `{ ..., snippet_start, code }`, where `text`/`code` are the lines
+joined by `\n`. Line numbers are implicit — the i-th line is `start_line + i` (or
+`snippet_start + i`) — so they are never repeated on the wire. Together these keep responses a
+fraction of the size of an equivalent grep-and-read.

@@ -15,6 +15,15 @@ That's the whole idea. greplm keeps agents off the "grep, then read whole files"
 that burns context. Every query returns compact locations (and, for `snippet`, an exact
 slice) instead of file bodies, so the agent pulls in a few lines rather than thousands.
 
+## Compact by design on the wire
+
+The payload itself is tuned for an LLM reader, not a human. The MCP server (and `--json`
+output by default) emits **compact JSON** — no pretty-print indentation or per-field newlines.
+Snippet bodies are a single text blob with one starting line number instead of an array of
+`{line, text}` objects, so field names and line numbers are never repeated. On a typical
+`pack` that roughly halves the bytes versus indented, per-line JSON — for identical content.
+Pass `--pretty` on the CLI when you want indented JSON to read by eye.
+
 greplm tracks this automatically. Each query records the grep+read baseline (the full
 size of the unique files it referenced) against the size of the payload it actually
 returned; `greplm savings` aggregates the estimate (≈4 chars/token, a conservative basis):

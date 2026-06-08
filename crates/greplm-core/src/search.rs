@@ -996,21 +996,23 @@ impl Searcher {
             .max(1)
             .min(total.max(1))
             .min(to);
-        let mut out = Vec::new();
+        let mut body = String::new();
+        let mut last = from;
         for ln in from..=to {
             if let Some(text) = lines.get((ln - 1) as usize) {
-                out.push(SnippetLine {
-                    line: ln,
-                    text: (*text).to_string(),
-                });
+                if !body.is_empty() {
+                    body.push('\n');
+                }
+                body.push_str(text);
+                last = ln;
             }
         }
         Ok(Snippet {
             path: rel_path.to_string(),
             start_line: from,
-            end_line: to,
+            end_line: last,
             total_lines: total,
-            lines: out,
+            text: body,
         })
     }
 
@@ -1141,16 +1143,16 @@ impl Searcher {
                 .clone();
             let from = sym.line_start.max(1);
             let to = end.min(lines.len() as u32);
-            let mut snippet = Vec::new();
+            let mut code = String::new();
             for ln in from..=to {
                 if let Some(text) = lines.get((ln - 1) as usize) {
-                    snippet.push(SnippetLine {
-                        line: ln,
-                        text: text.clone(),
-                    });
+                    if !code.is_empty() {
+                        code.push('\n');
+                    }
+                    code.push_str(text);
                 }
             }
-            let chars: u64 = snippet.iter().map(|l| l.text.len() as u64 + 1).sum::<u64>()
+            let chars: u64 = code.len() as u64
                 + sym.signature.as_ref().map(|s| s.len() as u64).unwrap_or(0);
             let cost = context::est_tokens(chars).max(1);
             if used + cost > budget_tokens && !items.is_empty() {
@@ -1166,7 +1168,8 @@ impl Searcher {
                 line_start: sym.line_start,
                 line_end: sym.line_end,
                 signature: sym.signature.clone(),
-                snippet,
+                snippet_start: from,
+                code,
                 reason: c.reason.clone(),
                 score: c.score,
             });
@@ -1402,18 +1405,17 @@ impl Searcher {
 }
 
 /// A file slice with context, returned by [`Searcher::read_snippet`].
+///
+/// The body is a single `text` blob (lines joined by `\n`) rather than an array
+/// of per-line objects: line N is `start_line + i` for the i-th line, so the
+/// numbers are implicit and never repeated on the wire. This keeps the payload
+/// compact for agents while staying exactly reconstructable.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snippet {
     pub path: String,
     pub start_line: u32,
     pub end_line: u32,
     pub total_lines: u32,
-    pub lines: Vec<SnippetLine>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SnippetLine {
-    pub line: u32,
     pub text: String,
 }
 

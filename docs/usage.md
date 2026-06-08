@@ -40,8 +40,9 @@ greplm update --check   # see if a newer release is available
 ```
 
 Most query commands accept `--json` for agent consumption and `-C/--root <dir>` to point at a
-different project. Set `GREPLM_LOG=debug` for verbose logging. See [configuration](configuration.md)
-for `GREPLM_*` environment overrides.
+different project. `--json` is compact (single-line) by default — add `--pretty` if you want
+indented output to read by eye. Set `GREPLM_LOG=debug` for verbose logging. See
+[configuration](configuration.md) for `GREPLM_*` environment overrides.
 
 ## Warm daemon
 

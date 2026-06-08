@@ -464,7 +464,7 @@ fn read_snippet_clamps_extreme_ranges() {
     assert_eq!(snip.total_lines, 3);
     assert_eq!(snip.start_line, 1);
     assert_eq!(snip.end_line, 3);
-    assert_eq!(snip.lines.len(), 3);
+    assert_eq!(snip.text.lines().count(), 3);
 
     // A start line past EOF must clamp `start_line` into the file rather than
     // reporting an inverted range (start_line > end_line/total_lines).

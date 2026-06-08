@@ -12,9 +12,12 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::search::SnippetLine;
-
 /// One unit of packed context: a symbol, its signature, and a code snippet.
+///
+/// The snippet body is a single `code` blob (lines joined by `\n`) beginning at
+/// `snippet_start`, rather than an array of per-line `{line, text}` objects.
+/// Line numbers are implicit (`snippet_start + i`), so the field names and line
+/// numbers are not repeated on the wire — the dominant cost in a packed bundle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackItem {
     pub path: String,
@@ -25,7 +28,10 @@ pub struct PackItem {
     pub line_end: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
-    pub snippet: Vec<SnippetLine>,
+    /// First line number of `code` (usually equals `line_start`).
+    pub snippet_start: u32,
+    /// Snippet body: the symbol's lines joined by `\n`, possibly truncated.
+    pub code: String,
     /// Why this item was included (e.g. "match", "central", "callee of X").
     pub reason: String,
     pub score: f32,

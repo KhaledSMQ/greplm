@@ -57,3 +57,4 @@ walkdir = "2.5.0"
 xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
 
 [dev-dependencies]
+proptest = "1.11.0"

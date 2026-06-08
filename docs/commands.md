@@ -2,7 +2,9 @@
 
 Every command accepts the **global options** `-C, --root <dir>` (target another project),
 `--no-daemon` (bypass a running daemon), and — for query commands — `--json` (machine-readable
-output). They're omitted from the tables below for brevity.
+output). `--json` is **compact** (single-line, no indentation) by default, since the consumer
+is an LLM agent; add `--pretty` for human-readable, indented JSON. They're omitted from the
+tables below for brevity.
 
 Run `greplm <command> --help` for the full flag list. Most query commands support `--limit` /
 `--offset` for pagination.

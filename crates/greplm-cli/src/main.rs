@@ -25,8 +25,26 @@ use serde::de::DeserializeOwned;
 #[derive(Debug, Parser)]
 #[command(name = "greplm", version, about, long_about = None)]
 struct Cli {
+    /// Pretty-print JSON output (indented). Default is compact, single-line
+    /// JSON — denser for LLM agents, which are the primary consumer.
+    #[arg(long, global = true)]
+    pretty: bool,
     #[command(subcommand)]
     command: Command,
+}
+
+/// Whether `--json` output should be pretty-printed. Defaults to compact; set
+/// once from the parsed CLI flag in [`run`].
+static PRETTY_JSON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Serialize a value as JSON, honoring the global `--pretty` flag. Compact by
+/// default so agents pay for data, not whitespace.
+fn to_json<T: serde::Serialize + ?Sized>(value: &T) -> serde_json::Result<String> {
+    if PRETTY_JSON.load(std::sync::atomic::Ordering::Relaxed) {
+        serde_json::to_string_pretty(value)
+    } else {
+        serde_json::to_string(value)
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -575,6 +593,7 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    PRETTY_JSON.store(cli.pretty, std::sync::atomic::Ordering::Relaxed);
     match cli.command {
         Command::Init(args) => cmd_init(args),
         Command::Index(args) => cmd_index(args),
@@ -689,7 +708,7 @@ fn cmd_semantic_search(args: SemanticSearchArgs) -> Result<()> {
         g.record_savings("semantic", &files, returned_chars, hits.len() as u64);
     }
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&hits)?);
+        println!("{}", to_json(&hits)?);
     } else {
         let mut out = std::io::BufWriter::new(std::io::stdout());
         for h in &hits {
@@ -760,7 +779,7 @@ fn cmd_index(args: IndexArgs) -> Result<()> {
             "segments": stats.segments,
             "elapsed_ms": elapsed.as_millis(),
         });
-        println!("{}", serde_json::to_string_pretty(&v)?);
+        println!("{}", to_json(&v)?);
     } else {
         println!(
             "indexed {} files ({} symbols), {} removed, {} segment(s) in {:.2?}",
@@ -816,7 +835,7 @@ fn cmd_search(args: SearchArgs) -> Result<()> {
     let files: BTreeSet<String> = hits.iter().map(|h| h.path.clone()).collect();
     record_savings(&args.root, "search", files, hits.len() as u64, &hits);
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&hits)?);
+        println!("{}", to_json(&hits)?);
     } else {
         let mut out = std::io::BufWriter::new(std::io::stdout());
         for h in &hits {
@@ -844,7 +863,7 @@ fn cmd_symbols(args: SymbolsArgs) -> Result<()> {
     let files: BTreeSet<String> = hits.iter().map(|h| h.path.clone()).collect();
     record_savings(&args.root, "symbols", files, hits.len() as u64, &hits);
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&hits)?);
+        println!("{}", to_json(&hits)?);
     } else {
         let mut out = std::io::BufWriter::new(std::io::stdout());
         for h in &hits {
@@ -872,7 +891,7 @@ fn cmd_outline(args: OutlineArgs) -> Result<()> {
             .outline(&args.file)?,
     };
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&hits)?);
+        println!("{}", to_json(&hits)?);
     } else {
         let mut out = std::io::BufWriter::new(std::io::stdout());
         for h in &hits {
@@ -902,7 +921,7 @@ fn cmd_refs(args: RefsArgs) -> Result<()> {
     let files: BTreeSet<String> = hits.iter().map(|h| h.path.clone()).collect();
     record_savings(&args.root, "refs", files, hits.len() as u64, &hits);
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&hits)?);
+        println!("{}", to_json(&hits)?);
     } else {
         let mut out = std::io::BufWriter::new(std::io::stdout());
         for h in &hits {
@@ -932,7 +951,7 @@ fn cmd_xref(args: RefsArgs) -> Result<()> {
     let files: BTreeSet<String> = hits.iter().map(|h| h.path.clone()).collect();
     record_savings(&args.root, "xref", files, hits.len() as u64, &hits);
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&hits)?);
+        println!("{}", to_json(&hits)?);
     } else {
         let mut out = std::io::BufWriter::new(std::io::stdout());
         for h in &hits {
@@ -994,7 +1013,7 @@ fn cmd_callees(args: CallArgs) -> Result<()> {
 
 fn print_callsites(hits: &[CallSite], json: bool) -> Result<()> {
     if json {
-        println!("{}", serde_json::to_string_pretty(hits)?);
+        println!("{}", to_json(hits)?);
     } else {
         let mut out = std::io::BufWriter::new(std::io::stdout());
         for h in hits {
@@ -1027,7 +1046,7 @@ fn cmd_impact(args: ImpactArgs) -> Result<()> {
     let files: BTreeSet<String> = nodes.iter().map(|n| n.path.clone()).collect();
     record_savings(&args.root, "impact", files, nodes.len() as u64, &nodes);
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&nodes)?);
+        println!("{}", to_json(&nodes)?);
     } else {
         let mut out = std::io::BufWriter::new(std::io::stdout());
         for n in &nodes {
@@ -1059,7 +1078,7 @@ fn cmd_def(args: DefArgs) -> Result<()> {
     let files: BTreeSet<String> = hits.iter().map(|h| h.path.clone()).collect();
     record_savings(&args.root, "def", files, hits.len() as u64, &hits);
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&hits)?);
+        println!("{}", to_json(&hits)?);
     } else {
         let mut out = std::io::BufWriter::new(std::io::stdout());
         for h in &hits {
@@ -1092,7 +1111,7 @@ fn cmd_refs_at(args: DefArgs) -> Result<()> {
     let files: BTreeSet<String> = hits.iter().map(|h| h.path.clone()).collect();
     record_savings(&args.root, "refs-at", files, hits.len() as u64, &hits);
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&hits)?);
+        println!("{}", to_json(&hits)?);
     } else {
         let mut out = std::io::BufWriter::new(std::io::stdout());
         for h in &hits {
@@ -1133,7 +1152,7 @@ fn cmd_ast(args: AstArgs) -> Result<()> {
     let files: BTreeSet<String> = hits.iter().map(|h| h.path.clone()).collect();
     record_savings(&args.root, "ast", files, hits.len() as u64, &hits);
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&hits)?);
+        println!("{}", to_json(&hits)?);
     } else {
         let mut out = std::io::BufWriter::new(std::io::stdout());
         for h in &hits {
@@ -1170,7 +1189,7 @@ fn cmd_pack(args: PackArgs) -> Result<()> {
     let files: BTreeSet<String> = pack.items.iter().map(|i| i.path.clone()).collect();
     record_savings(&args.root, "pack", files, pack.items.len() as u64, &pack);
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&pack)?);
+        println!("{}", to_json(&pack)?);
     } else {
         let mut out = std::io::BufWriter::new(std::io::stdout());
         writeln!(
@@ -1194,8 +1213,8 @@ fn cmd_pack(args: PackArgs) -> Result<()> {
                 item.line_end,
                 item.score,
             )?;
-            for line in &item.snippet {
-                writeln!(out, "{:>6} | {}", line.line, line.text)?;
+            for (i, text) in item.code.lines().enumerate() {
+                writeln!(out, "{:>6} | {}", item.snippet_start + i as u32, text)?;
             }
             writeln!(out)?;
         }
@@ -1218,7 +1237,7 @@ fn cmd_blame(args: BlameArgs) -> Result<()> {
             .blame(&args.file, args.line)?,
     };
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&b)?);
+        println!("{}", to_json(&b)?);
     } else {
         println!(
             "{} {} {}:{}\n{}",
@@ -1240,7 +1259,7 @@ fn cmd_history(args: HistoryArgs) -> Result<()> {
             .symbol_history(&args.name, args.limit)?,
     };
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&h)?);
+        println!("{}", to_json(&h)?);
     } else {
         let mut out = std::io::BufWriter::new(std::io::stdout());
         writeln!(
@@ -1269,7 +1288,7 @@ fn cmd_changed(args: ChangedArgs) -> Result<()> {
             .changed_since(&args.rev)?,
     };
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&changed)?);
+        println!("{}", to_json(&changed)?);
     } else {
         let mut out = std::io::BufWriter::new(std::io::stdout());
         for c in &changed {
@@ -1302,17 +1321,17 @@ fn cmd_snippet(args: SnippetArgs) -> Result<()> {
             args.context,
         )?,
     };
-    let returned_chars: u64 = snip.lines.iter().map(|l| l.text.len() as u64 + 1).sum();
+    let returned_chars: u64 = snip.text.len() as u64;
     if let Ok(g) = open_for_query(&args.root) {
         let files: BTreeSet<String> = [snip.path.clone()].into_iter().collect();
         g.record_savings("snippet", &files, returned_chars, 1);
     }
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&snip)?);
+        println!("{}", to_json(&snip)?);
     } else {
         let mut out = std::io::BufWriter::new(std::io::stdout());
-        for line in &snip.lines {
-            writeln!(out, "{:>6} | {}", line.line, line.text)?;
+        for (i, text) in snip.text.lines().enumerate() {
+            writeln!(out, "{:>6} | {}", snip.start_line + i as u32, text)?;
         }
     }
     Ok(())
@@ -1323,7 +1342,7 @@ fn cmd_summary(args: RootArg) -> Result<()> {
         Some(r) => r?,
         None => open_for_query(&args)?.searcher()?.summary(),
     };
-    println!("{}", serde_json::to_string_pretty(&summary)?);
+    println!("{}", to_json(&summary)?);
     Ok(())
 }
 
@@ -1332,7 +1351,7 @@ fn cmd_status(args: RootArg) -> Result<()> {
         Some(r) => r?,
         None => open_for_query(&args)?.status()?,
     };
-    println!("{}", serde_json::to_string_pretty(&status)?);
+    println!("{}", to_json(&status)?);
     Ok(())
 }
 
@@ -1416,7 +1435,7 @@ fn cmd_savings(args: SavingsArgs) -> Result<()> {
     let g = open_for_query(&args.root)?;
     let report = g.savings_report();
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        println!("{}", to_json(&report)?);
         return Ok(());
     }
 

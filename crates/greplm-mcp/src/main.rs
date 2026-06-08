@@ -258,8 +258,12 @@ fn record_savings<T: serde::Serialize>(
     g.record_savings(kind, &files, returned, hits.len() as u64);
 }
 
+/// Serialize a tool result for the agent. Output is compact (no pretty-print
+/// indentation/newlines): the consumer is an LLM, not a human, so every byte of
+/// whitespace is wasted context. This also keeps the wire payload in lockstep
+/// with the savings accounting, which measures the compact `to_string` length.
 fn ok_json<T: serde::Serialize>(value: &T) -> Result<CallToolResult, ErrorData> {
-    let text = serde_json::to_string_pretty(value).map_err(internal)?;
+    let text = serde_json::to_string(value).map_err(internal)?;
     Ok(CallToolResult::success(vec![Content::text(text)]))
 }
 
@@ -814,7 +818,7 @@ impl GreplmServer {
                 },
                 |g| {
                     let snip = g.searcher()?.read_snippet(&file, start, end, context)?;
-                    let returned: u64 = snip.lines.iter().map(|l| l.text.len() as u64 + 1).sum();
+                    let returned: u64 = snip.text.len() as u64;
                     let files: BTreeSet<String> = [snip.path.clone()].into_iter().collect();
                     g.record_savings("snippet", &files, returned, 1);
                     Ok(serde_json::to_value(snip)?)
