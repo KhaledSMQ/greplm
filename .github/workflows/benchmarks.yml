@@ -1,0 +1,42 @@
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 5 * * 1"
+
+concurrency:
+  group: bench-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  criterion:
+    name: criterion hot paths
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run benchmarks
+        run: cargo bench -p greplm-core --bench hot_paths --locked | tee bench-output.txt
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            echo '## Criterion hot-path results'
+            echo ''
+            echo '```'
+            grep -E 'time:|thrpt:|^(kernels|query_plan|search|candidates)/' bench-output.txt || true
+            echo '```'
+            echo ''
+            echo '_Note: absolute timings on shared CI runners are noisy; use them for trends, not hard gates. Compare locally with `--save-baseline` / `--baseline`._'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload criterion report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-report
+          path: |
+            target/criterion/**
+            bench-output.txt
+          if-no-files-found: ignore

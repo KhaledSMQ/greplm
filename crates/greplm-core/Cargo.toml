@@ -57,4 +57,9 @@ walkdir = "2.5.0"
 xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
 
 [dev-dependencies]
+criterion = { version = "0.8.2", features = ["html_reports"] }
 proptest = "1.11.0"
+
+[[bench]]
+name = "hot_paths"
+harness = false
