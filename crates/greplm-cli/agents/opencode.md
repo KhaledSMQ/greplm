@@ -23,7 +23,7 @@ greplm snippet crates/greplm-core/src/trigram.rs 15 25 --context 3
 
 # Code intelligence
 greplm pack "how does incremental indexing work" --budget 8000  # task -> ranked, budgeted context
-greplm def crates/greplm-core/src/search.rs 663 57   # typed go-to-definition (file line col)
+greplm def <file> <line> <col>   # typed go-to-definition (file line col)
 greplm callers references            # who calls this symbol
 greplm callees merge_segments        # what this symbol calls
 greplm impact add_doc --depth 3      # blast radius: what breaks if I change this
@@ -31,7 +31,7 @@ greplm xref SegmentWriter            # resolved references (defs + calls + impor
 greplm ast 'fn $NAME() {}' --lang rust   # structural / AST search (or a tree-sitter query)
 
 # Git time-travel
-greplm blame crates/greplm-core/src/search.rs 488
+greplm blame <file> <line>
 greplm history references            # commits that touched a symbol
 greplm changed main                  # files + symbols changed since a revision
 

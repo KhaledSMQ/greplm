@@ -7,7 +7,7 @@ greplm is a fast, offline code search and code intelligence tool built for LLM a
 | Guide | Description |
 |-------|-------------|
 | [Getting started](getting-started.md) | Install, index your project, add agent files |
-| [Usage](usage.md) | Common workflows, daemon setup, semantic search |
+| [Usage](usage.md) | Common workflows, setup/doctor, daemon, semantic search |
 | [Code intelligence](code-intelligence.md) | Call graph, go-to-definition, AST search, context packs |
 | [Token efficiency](token-efficiency.md) | How greplm saves agent context, benchmarks |
 

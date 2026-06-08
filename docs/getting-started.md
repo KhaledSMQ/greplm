@@ -42,18 +42,24 @@ greplm refs SegmentWriter
 Each query prints compact, ready-to-jump locations:
 
 ```console
-$ greplm search "SegmentWriter" --limit 4
-crates/greplm-core/src/segment.rs:68:12: pub struct SegmentWriter {
+$ greplm search "SegmentWriter" --path segment.rs --limit 4
+crates/greplm-core/src/segment.rs:107:12: pub struct SegmentWriter {
+crates/greplm-core/src/segment.rs:114:6: impl SegmentWriter {
 
 $ greplm symbols Searcher --limit 4
-function   searcher                 crates/greplm-core/src/lib.rs:129-131
-struct     Searcher                 crates/greplm-core/src/search.rs:219-223
-function   swap_searcher            crates/greplm-core/src/daemon.rs:50-53
-function   read_searcher            crates/greplm-core/src/daemon.rs:46-48
+function   searcher                 crates/greplm-core/src/lib.rs:204-206
+struct     Searcher                 crates/greplm-core/src/search.rs:351-355
+function   swap_searcher            crates/greplm-core/src/daemon.rs:85-88
+function   read_searcher            crates/greplm-core/src/daemon.rs:81-83
 
 $ greplm refs SegmentWriter --limit 4
-crates/greplm-core/src/segment.rs:68:12: pub struct SegmentWriter {
+crates/greplm-core/src/segment.rs:107:12: pub struct SegmentWriter {
+README.md:49:16: greplm search "SegmentWriter"   # search file contents
+README.md:51:13: greplm refs SegmentWriter       # find references
+bench/README.md:39:2: `SegmentWriter` is judged on the source, not on the `queries.json` that defines it.
 ```
+
+Definitions rank first in `refs`; without `--path`, doc files that mention the identifier also appear.
 
 Re-run `greplm index` after changes (it's incremental), or keep it automatic with `greplm watch`.
 

@@ -51,12 +51,13 @@ greplm refs SegmentWriter
 Each query prints compact, ready-to-jump locations:
 
 ```console
-$ greplm search "SegmentWriter" --limit 4
-crates/greplm-core/src/segment.rs:68:12: pub struct SegmentWriter {
+$ greplm search "SegmentWriter" --path segment.rs --limit 4
+crates/greplm-core/src/segment.rs:107:12: pub struct SegmentWriter {
+crates/greplm-core/src/segment.rs:114:6: impl SegmentWriter {
 
 $ greplm symbols Searcher --limit 4
-function   searcher                 crates/greplm-core/src/lib.rs:129-131
-struct     Searcher                 crates/greplm-core/src/search.rs:342-346
+function   searcher                 crates/greplm-core/src/lib.rs:204-206
+struct     Searcher                 crates/greplm-core/src/search.rs:351-355
 ```
 
 Re-run `greplm index` after changes (it's incremental), or keep it automatic with `greplm watch`.
@@ -73,7 +74,10 @@ Every command accepts `-C, --root <dir>` (target another project), `--no-daemon`
 | `greplm index [--force]` | Build or refresh the index |
 | `greplm watch [--debounce-ms <ms>]` | Re-index on file changes |
 | `greplm clean` | Delete the `.greplm/` index directory |
-| `greplm serve` | Run the warm-index daemon |
+| `greplm serve [--global]` | Run the warm-index daemon |
+| `greplm setup` | Build the index and install the always-on global daemon service |
+| `greplm doctor [--fix]` | Diagnose (and optionally fix) index, daemon, and version issues |
+| `greplm update [--check]` | Self-update to the latest release |
 
 ### Querying
 

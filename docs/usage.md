@@ -3,7 +3,10 @@
 ## Common workflows
 
 ```bash
-# Set up
+# First-run (index + always-on global daemon service)
+greplm setup
+
+# Set up manually
 greplm init             # scaffold .greplm/config.toml (no indexing yet)
 
 # Indexing
@@ -29,10 +32,16 @@ greplm snippet crates/greplm-core/src/trigram.rs 15 25 --context 3
 # Repo info
 greplm summary
 greplm status
+
+# Health check
+greplm doctor           # diagnose index freshness, daemon, and version
+greplm doctor --fix     # refresh a stale index and install the daemon service
+greplm update --check   # see if a newer release is available
 ```
 
 Most query commands accept `--json` for agent consumption and `-C/--root <dir>` to point at a
-different project. Set `GREPLM_LOG=debug` for verbose logging.
+different project. Set `GREPLM_LOG=debug` for verbose logging. See [configuration](configuration.md)
+for `GREPLM_*` environment overrides.
 
 ## Warm daemon
 

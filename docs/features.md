@@ -8,7 +8,7 @@ index — rather than for humans scrolling a terminal.
 | | greplm | `ripgrep` | `ctags` / LSP |
 |---|---|---|---|
 | Content search (literal/regex/word) | ✅ | ✅ | ❌ |
-| Symbol definitions (13 languages) | ✅ | ❌ | ✅ |
+| Symbol definitions (14 languages) | ✅ | ❌ | ✅ |
 | Find references | ✅ | ⚠️ text-only | ✅ |
 | Call graph: callers / callees | ✅ | ❌ | ⚠️ LSP only |
 | Blast radius (transitive impact) | ✅ | ❌ | ❌ |
