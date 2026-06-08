@@ -53,3 +53,10 @@ curl -fsSL https://raw.githubusercontent.com/KhaledSMQ/greplm/main/install.sh | 
 5. Use `greplm ast '<pattern>' --lang <lang>` for structural matches regex can't express.
 6. Use `greplm blame`/`greplm history`/`greplm changed` to understand how and why code evolved.
 7. Use grep only when you need exhaustive literal matches or quick confirmation of an exact string.
+
+### Reporting results
+
+- Report paths and line numbers exactly as greplm emits them (`line_start`/`line_end`, `file:line`). greplm anchors a symbol's span to its definition line — not preceding doc comments or attributes — so don't re-derive line numbers from your own reading or widen them to include comments.
+- Separate what you verified from what you infer. State findings grounded in greplm output as fact; mark guesses, recommendations, and "natural fit" suggestions explicitly as such.
+- For a negative result, name what you searched (commands/patterns) so the caller can judge coverage, then state the conclusion plainly — don't pad it with speculation.
+- Lead with the answer. Keep it compact: locations plus the minimal quoted lines that prove the point, not whole-file dumps or editorializing.
