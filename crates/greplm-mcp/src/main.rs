@@ -15,6 +15,8 @@ use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler, ServiceExt
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use greplm_core::client::Client;
+use greplm_core::proto::Request;
 use greplm_core::search::{SearchQuery, SymbolQuery};
 use greplm_core::Greplm;
 
@@ -206,16 +208,28 @@ fn internal(e: impl std::fmt::Display) -> ErrorData {
     ErrorData::internal_error(e.to_string(), None)
 }
 
-/// Open a project ready to query: discover the index and build it if missing
-/// (self-healing — no "run `greplm index` first" error on a fresh checkout).
-/// Cheap when an index already exists (a single manifest read). Keeping a
-/// running `greplm watch`/`serve` is what keeps the index fresh; we deliberately
-/// don't poll the filesystem here (a full walk + cache open per call costs
-/// ~100ms and would tax every tool invocation).
-fn open_ready(root: &std::path::Path) -> greplm_core::Result<Greplm> {
-    let g = Greplm::discover(root)?;
-    let _ = g.ensure_indexed()?;
-    Ok(g)
+/// Run a read query against the warm daemon if one is listening, else fall back
+/// to an in-process (cold) query. Routing through the daemon turns a ~28ms
+/// cold index-open per call into a ~0.7ms warm socket round-trip, and the
+/// daemon's response is already the JSON we return — so we forward it verbatim.
+///
+/// The cold fallback self-heals a missing index (so a fresh checkout still
+/// works without `greplm index`) before running `fallback` in-process.
+fn served<F>(root: &std::path::Path, req: Request, fallback: F) -> Result<serde_json::Value, ErrorData>
+where
+    F: FnOnce(&Greplm) -> greplm_core::Result<serde_json::Value>,
+{
+    let g = Greplm::discover(root).map_err(internal)?;
+    if let Some(mut client) = Client::try_connect(&g.socket_path()) {
+        match client.request(&req) {
+            Ok(resp) if resp.ok => return Ok(resp.result.unwrap_or(serde_json::Value::Null)),
+            Ok(resp) => return Err(internal(resp.error.unwrap_or_default())),
+            // Daemon hiccup (closed connection, bad frame): fall back in-process.
+            Err(_) => {}
+        }
+    }
+    let _ = g.ensure_indexed();
+    fallback(&g).map_err(internal)
 }
 
 /// Record token savings for a query that returns location-style hits: the
@@ -323,17 +337,17 @@ impl GreplmServer {
             max_per_file: 20,
             exhaustive: args.exhaustive,
         };
-        let hits = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = open_ready(&root)?;
-            // Falls back to an index-free walk if the index is unavailable.
-            let hits = g.search_or_grep(&query)?;
-            record_savings(&g, "search", &hits, |h| h.path.clone());
-            Ok(hits)
+        let v = tokio::task::spawn_blocking(move || {
+            served(&root, Request::Search(query.clone()), |g| {
+                // Falls back to an index-free walk if the index is unavailable.
+                let hits = g.search_or_grep(&query)?;
+                record_savings(g, "search", &hits, |h| h.path.clone());
+                Ok(serde_json::to_value(hits)?)
+            })
         })
         .await
-        .map_err(internal)?
-        .map_err(internal)?;
-        ok_json(&hits)
+        .map_err(internal)??;
+        ok_json(&v)
     }
 
     #[tool(
@@ -352,16 +366,16 @@ impl GreplmServer {
             limit: args.limit.unwrap_or(50),
             offset: 0,
         };
-        let hits = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = open_ready(&root)?;
-            let hits = g.searcher()?.symbols(&query)?;
-            record_savings(&g, "symbols", &hits, |h| h.path.clone());
-            Ok(hits)
+        let v = tokio::task::spawn_blocking(move || {
+            served(&root, Request::Symbols(query.clone()), |g| {
+                let hits = g.searcher()?.symbols(&query)?;
+                record_savings(g, "symbols", &hits, |h| h.path.clone());
+                Ok(serde_json::to_value(hits)?)
+            })
         })
         .await
-        .map_err(internal)?
-        .map_err(internal)?;
-        ok_json(&hits)
+        .map_err(internal)??;
+        ok_json(&v)
     }
 
     #[tool(
@@ -374,14 +388,14 @@ impl GreplmServer {
     ) -> Result<CallToolResult, ErrorData> {
         let root = self.root.clone();
         let file = args.file;
-        let hits = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = open_ready(&root)?;
-            g.searcher()?.outline(&file)
+        let v = tokio::task::spawn_blocking(move || {
+            served(&root, Request::Outline { file: file.clone() }, |g| {
+                Ok(serde_json::to_value(g.searcher()?.outline(&file)?)?)
+            })
         })
         .await
-        .map_err(internal)?
-        .map_err(internal)?;
-        ok_json(&hits)
+        .map_err(internal)??;
+        ok_json(&v)
     }
 
     #[tool(
@@ -396,16 +410,20 @@ impl GreplmServer {
         let name = args.name;
         let limit = args.limit.unwrap_or(100);
         let offset = args.offset.unwrap_or(0);
-        let hits = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = open_ready(&root)?;
-            let hits = g.searcher()?.references(&name, limit, offset)?;
-            record_savings(&g, "refs", &hits, |h| h.path.clone());
-            Ok(hits)
+        let v = tokio::task::spawn_blocking(move || {
+            served(
+                &root,
+                Request::Refs { name: name.clone(), limit, offset },
+                |g| {
+                    let hits = g.searcher()?.references(&name, limit, offset)?;
+                    record_savings(g, "refs", &hits, |h| h.path.clone());
+                    Ok(serde_json::to_value(hits)?)
+                },
+            )
         })
         .await
-        .map_err(internal)?
-        .map_err(internal)?;
-        ok_json(&hits)
+        .map_err(internal)??;
+        ok_json(&v)
     }
 
     #[tool(
@@ -422,16 +440,20 @@ impl GreplmServer {
         let name = args.name;
         let limit = args.limit.unwrap_or(100);
         let offset = args.offset.unwrap_or(0);
-        let hits = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = open_ready(&root)?;
-            let hits = g.searcher()?.references_resolved(&name, limit, offset);
-            record_savings(&g, "xref", &hits, |h| h.path.clone());
-            Ok(hits)
+        let v = tokio::task::spawn_blocking(move || {
+            served(
+                &root,
+                Request::RefsResolved { name: name.clone(), limit, offset },
+                |g| {
+                    let hits = g.searcher()?.references_resolved(&name, limit, offset);
+                    record_savings(g, "xref", &hits, |h| h.path.clone());
+                    Ok(serde_json::to_value(hits)?)
+                },
+            )
         })
         .await
-        .map_err(internal)?
-        .map_err(internal)?;
-        ok_json(&hits)
+        .map_err(internal)??;
+        ok_json(&v)
     }
 
     #[tool(
@@ -447,16 +469,20 @@ impl GreplmServer {
         let name = args.name;
         let limit = args.limit.unwrap_or(100);
         let offset = args.offset.unwrap_or(0);
-        let hits = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = open_ready(&root)?;
-            let hits = g.searcher()?.callers(&name, limit, offset);
-            record_savings(&g, "callers", &hits, |h| h.path.clone());
-            Ok(hits)
+        let v = tokio::task::spawn_blocking(move || {
+            served(
+                &root,
+                Request::Callers { name: name.clone(), limit, offset },
+                |g| {
+                    let hits = g.searcher()?.callers(&name, limit, offset);
+                    record_savings(g, "callers", &hits, |h| h.path.clone());
+                    Ok(serde_json::to_value(hits)?)
+                },
+            )
         })
         .await
-        .map_err(internal)?
-        .map_err(internal)?;
-        ok_json(&hits)
+        .map_err(internal)??;
+        ok_json(&v)
     }
 
     #[tool(
@@ -471,16 +497,20 @@ impl GreplmServer {
         let name = args.name;
         let limit = args.limit.unwrap_or(100);
         let offset = args.offset.unwrap_or(0);
-        let hits = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = open_ready(&root)?;
-            let hits = g.searcher()?.callees(&name, limit, offset);
-            record_savings(&g, "callees", &hits, |h| h.path.clone());
-            Ok(hits)
+        let v = tokio::task::spawn_blocking(move || {
+            served(
+                &root,
+                Request::Callees { name: name.clone(), limit, offset },
+                |g| {
+                    let hits = g.searcher()?.callees(&name, limit, offset);
+                    record_savings(g, "callees", &hits, |h| h.path.clone());
+                    Ok(serde_json::to_value(hits)?)
+                },
+            )
         })
         .await
-        .map_err(internal)?
-        .map_err(internal)?;
-        ok_json(&hits)
+        .map_err(internal)??;
+        ok_json(&v)
     }
 
     #[tool(
@@ -497,16 +527,20 @@ impl GreplmServer {
         let name = args.name;
         let depth = args.depth.unwrap_or(3);
         let limit = args.limit.unwrap_or(200);
-        let nodes = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = open_ready(&root)?;
-            let nodes = g.searcher()?.blast_radius(&name, depth, limit);
-            record_savings(&g, "impact", &nodes, |n| n.path.clone());
-            Ok(nodes)
+        let v = tokio::task::spawn_blocking(move || {
+            served(
+                &root,
+                Request::BlastRadius { name: name.clone(), depth, limit },
+                |g| {
+                    let nodes = g.searcher()?.blast_radius(&name, depth, limit);
+                    record_savings(g, "impact", &nodes, |n| n.path.clone());
+                    Ok(serde_json::to_value(nodes)?)
+                },
+            )
         })
         .await
-        .map_err(internal)?
-        .map_err(internal)?;
-        ok_json(&nodes)
+        .map_err(internal)??;
+        ok_json(&v)
     }
 
     #[tool(
@@ -519,14 +553,14 @@ impl GreplmServer {
     ) -> Result<CallToolResult, ErrorData> {
         let root = self.root.clone();
         let (file, line) = (args.file, args.line);
-        let b = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = open_ready(&root)?;
-            g.searcher()?.blame(&file, line)
+        let v = tokio::task::spawn_blocking(move || {
+            served(&root, Request::Blame { file: file.clone(), line }, |g| {
+                Ok(serde_json::to_value(g.searcher()?.blame(&file, line)?)?)
+            })
         })
         .await
-        .map_err(internal)?
-        .map_err(internal)?;
-        ok_json(&b)
+        .map_err(internal)??;
+        ok_json(&v)
     }
 
     #[tool(
@@ -540,14 +574,14 @@ impl GreplmServer {
         let root = self.root.clone();
         let name = args.name;
         let limit = args.limit.unwrap_or(20);
-        let h = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = open_ready(&root)?;
-            g.searcher()?.symbol_history(&name, limit)
+        let v = tokio::task::spawn_blocking(move || {
+            served(&root, Request::History { name: name.clone(), limit }, |g| {
+                Ok(serde_json::to_value(g.searcher()?.symbol_history(&name, limit)?)?)
+            })
         })
         .await
-        .map_err(internal)?
-        .map_err(internal)?;
-        ok_json(&h)
+        .map_err(internal)??;
+        ok_json(&v)
     }
 
     #[tool(
@@ -561,14 +595,14 @@ impl GreplmServer {
     ) -> Result<CallToolResult, ErrorData> {
         let root = self.root.clone();
         let rev = args.rev;
-        let changed = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = open_ready(&root)?;
-            g.searcher()?.changed_since(&rev)
+        let v = tokio::task::spawn_blocking(move || {
+            served(&root, Request::ChangedSince { rev: rev.clone() }, |g| {
+                Ok(serde_json::to_value(g.searcher()?.changed_since(&rev)?)?)
+            })
         })
         .await
-        .map_err(internal)?
-        .map_err(internal)?;
-        ok_json(&changed)
+        .map_err(internal)??;
+        ok_json(&v)
     }
 
     #[tool(
@@ -585,19 +619,24 @@ impl GreplmServer {
         let root = self.root.clone();
         let task = args.task;
         let budget = args.budget.unwrap_or(8000);
-        let pack = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = open_ready(&root)?;
-            let pack = g.searcher()?.context_pack(&task, budget);
-            let files: std::collections::BTreeSet<String> =
-                pack.items.iter().map(|i| i.path.clone()).collect();
-            let returned = serde_json::to_string(&pack).map(|s| s.len()).unwrap_or(0) as u64;
-            g.record_savings("pack", &files, returned, pack.items.len() as u64);
-            Ok(pack)
+        let v = tokio::task::spawn_blocking(move || {
+            served(
+                &root,
+                Request::ContextPack { task: task.clone(), budget },
+                |g| {
+                    let pack = g.searcher()?.context_pack(&task, budget);
+                    let files: std::collections::BTreeSet<String> =
+                        pack.items.iter().map(|i| i.path.clone()).collect();
+                    let returned =
+                        serde_json::to_string(&pack).map(|s| s.len()).unwrap_or(0) as u64;
+                    g.record_savings("pack", &files, returned, pack.items.len() as u64);
+                    Ok(serde_json::to_value(pack)?)
+                },
+            )
         })
         .await
-        .map_err(internal)?
-        .map_err(internal)?;
-        ok_json(&pack)
+        .map_err(internal)??;
+        ok_json(&v)
     }
 
     #[tool(
@@ -615,18 +654,25 @@ impl GreplmServer {
         let lang = args.lang;
         let limit = args.limit.unwrap_or(50);
         let offset = args.offset.unwrap_or(0);
-        let hits = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = open_ready(&root)?;
-            let hits = g
-                .searcher()?
-                .structural_search(&pattern, &lang, limit, offset)?;
-            record_savings(&g, "ast", &hits, |h| h.path.clone());
-            Ok(hits)
+        let v = tokio::task::spawn_blocking(move || {
+            served(
+                &root,
+                Request::Structural {
+                    pattern: pattern.clone(),
+                    lang: lang.clone(),
+                    limit,
+                    offset,
+                },
+                |g| {
+                    let hits = g.searcher()?.structural_search(&pattern, &lang, limit, offset)?;
+                    record_savings(g, "ast", &hits, |h| h.path.clone());
+                    Ok(serde_json::to_value(hits)?)
+                },
+            )
         })
         .await
-        .map_err(internal)?
-        .map_err(internal)?;
-        ok_json(&hits)
+        .map_err(internal)??;
+        ok_json(&v)
     }
 
     #[tool(
@@ -641,16 +687,20 @@ impl GreplmServer {
     ) -> Result<CallToolResult, ErrorData> {
         let root = self.root.clone();
         let (file, line, col) = (args.file, args.line, args.col);
-        let hits = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = open_ready(&root)?;
-            let hits = g.searcher()?.definition(&file, line, col)?;
-            record_savings(&g, "def", &hits, |h| h.path.clone());
-            Ok(hits)
+        let v = tokio::task::spawn_blocking(move || {
+            served(
+                &root,
+                Request::Definition { file: file.clone(), line, col },
+                |g| {
+                    let hits = g.searcher()?.definition(&file, line, col)?;
+                    record_savings(g, "def", &hits, |h| h.path.clone());
+                    Ok(serde_json::to_value(hits)?)
+                },
+            )
         })
         .await
-        .map_err(internal)?
-        .map_err(internal)?;
-        ok_json(&hits)
+        .map_err(internal)??;
+        ok_json(&v)
     }
 
     #[tool(
@@ -664,16 +714,20 @@ impl GreplmServer {
     ) -> Result<CallToolResult, ErrorData> {
         let root = self.root.clone();
         let (file, line, col) = (args.file, args.line, args.col);
-        let hits = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = open_ready(&root)?;
-            let hits = g.searcher()?.references_of(&file, line, col)?;
-            record_savings(&g, "refs-at", &hits, |h| h.path.clone());
-            Ok(hits)
+        let v = tokio::task::spawn_blocking(move || {
+            served(
+                &root,
+                Request::ReferencesAt { file: file.clone(), line, col },
+                |g| {
+                    let hits = g.searcher()?.references_of(&file, line, col)?;
+                    record_savings(g, "refs-at", &hits, |h| h.path.clone());
+                    Ok(serde_json::to_value(hits)?)
+                },
+            )
         })
         .await
-        .map_err(internal)?
-        .map_err(internal)?;
-        ok_json(&hits)
+        .map_err(internal)??;
+        ok_json(&v)
     }
 
     #[tool(
@@ -689,18 +743,22 @@ impl GreplmServer {
         let start = args.start;
         let end = args.end.unwrap_or(start);
         let context = args.context.unwrap_or(3);
-        let snip = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = open_ready(&root)?;
-            let snip = g.searcher()?.read_snippet(&file, start, end, context)?;
-            let returned: u64 = snip.lines.iter().map(|l| l.text.len() as u64 + 1).sum();
-            let files: BTreeSet<String> = [snip.path.clone()].into_iter().collect();
-            g.record_savings("snippet", &files, returned, 1);
-            Ok(snip)
+        let v = tokio::task::spawn_blocking(move || {
+            served(
+                &root,
+                Request::Snippet { file: file.clone(), start, end, context },
+                |g| {
+                    let snip = g.searcher()?.read_snippet(&file, start, end, context)?;
+                    let returned: u64 = snip.lines.iter().map(|l| l.text.len() as u64 + 1).sum();
+                    let files: BTreeSet<String> = [snip.path.clone()].into_iter().collect();
+                    g.record_savings("snippet", &files, returned, 1);
+                    Ok(serde_json::to_value(snip)?)
+                },
+            )
         })
         .await
-        .map_err(internal)?
-        .map_err(internal)?;
-        ok_json(&snip)
+        .map_err(internal)??;
+        ok_json(&v)
     }
 
     #[tool(
@@ -712,14 +770,14 @@ impl GreplmServer {
         Parameters(_args): Parameters<SummaryArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         let root = self.root.clone();
-        let summary = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = open_ready(&root)?;
-            Ok(g.searcher()?.summary())
+        let v = tokio::task::spawn_blocking(move || {
+            served(&root, Request::Summary, |g| {
+                Ok(serde_json::to_value(g.searcher()?.summary())?)
+            })
         })
         .await
-        .map_err(internal)?
-        .map_err(internal)?;
-        ok_json(&summary)
+        .map_err(internal)??;
+        ok_json(&v)
     }
 
     #[tool(
@@ -731,15 +789,21 @@ impl GreplmServer {
         Parameters(_args): Parameters<StatusArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         let root = self.root.clone();
-        let status = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
+        let v = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, ErrorData> {
             // Report the index as-is; never build/refresh just to read status.
-            let g = Greplm::discover(&root)?;
-            g.status()
+            let g = Greplm::discover(&root).map_err(internal)?;
+            if let Some(mut c) = Client::try_connect(&g.socket_path()) {
+                if let Ok(resp) = c.request(&Request::Status) {
+                    if resp.ok {
+                        return Ok(resp.result.unwrap_or(serde_json::Value::Null));
+                    }
+                }
+            }
+            serde_json::to_value(g.status().map_err(internal)?).map_err(internal)
         })
         .await
-        .map_err(internal)?
-        .map_err(internal)?;
-        ok_json(&status)
+        .map_err(internal)??;
+        ok_json(&v)
     }
 }
 
