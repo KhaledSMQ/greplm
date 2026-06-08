@@ -122,6 +122,58 @@ impl Greplm {
         }
     }
 
+    /// Ensure a usable, current-schema index exists, building it if absent,
+    /// empty, or left unreadable by an on-disk format change. Returns `true` if
+    /// a (re)build happened. This is the self-healing entry point for query
+    /// paths: a fresh checkout or a post-upgrade stale index transparently
+    /// builds instead of erroring with "run `greplm index` first".
+    ///
+    /// Cheap when a good index already exists (one manifest read). The actual
+    /// rebuild-on-corrupt logic lives in [`Indexer::index_incremental`], which
+    /// falls back to a full rebuild on an unreadable/outdated manifest.
+    pub fn ensure_indexed(&self) -> Result<bool> {
+        match self.status() {
+            // A populated, current-schema index — nothing to do.
+            Ok(s) if s.indexed => return Ok(false),
+            // Initialized but empty, or readable-but-empty manifest: build.
+            Ok(_) => {}
+            // Unreadable/outdated manifest (e.g. schema bump): index() rebuilds.
+            Err(_) => {}
+        }
+        self.index(false)?;
+        Ok(true)
+    }
+
+    /// Stat-only freshness probe: does any file on disk differ from what the
+    /// index recorded (new, modified by size/mtime, or deleted)? No content
+    /// hashing and no reads — just the same cheap pre-check the incremental
+    /// indexer uses. The daemon calls this to guarantee read-after-write
+    /// consistency: if dirty, it reindexes before answering.
+    pub fn is_dirty(&self) -> Result<bool> {
+        let cache = cache::Cache::open(&self.paths.cache_file())?;
+        let existing = cache.load_all()?;
+        let walked = walk::walk(&self.paths, &self.config)?;
+
+        let mut seen = std::collections::HashSet::with_capacity(walked.entries.len());
+        for e in &walked.entries {
+            seen.insert(e.rel.clone());
+            let (_, mtime_ns, size) = cache::stat_key(&e.metadata);
+            match existing.get(&e.rel) {
+                Some(rec) if rec.size == size && rec.mtime_ns == mtime_ns => {}
+                // New file, or stat key changed.
+                _ => return Ok(true),
+            }
+        }
+        // A previously indexed file that disappeared (or became un-indexable,
+        // e.g. now too large/binary and dropped from the walk) is also dirty.
+        for path in existing.keys() {
+            if !seen.contains(path) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Merge all segments into a single compact segment, dropping tombstoned
     /// documents. Falls back to a full rebuild if the merge cannot proceed.
     pub fn compact(&self) -> Result<IndexStats> {
@@ -132,6 +184,19 @@ impl Greplm {
     /// Open a searcher over the current index.
     pub fn searcher(&self) -> Result<Searcher> {
         Searcher::open(&self.paths)
+    }
+
+    /// Content search that always returns results: it queries the index, and if
+    /// the index is missing or errors, transparently falls back to an
+    /// index-free walk+scan (grep parity). The fallback is logged at WARN.
+    pub fn search_or_grep(&self, query: &search::SearchQuery) -> Result<Vec<search::SearchHit>> {
+        match self.searcher().and_then(|s| s.search(query)) {
+            Ok(hits) => Ok(hits),
+            Err(e) => {
+                tracing::warn!("index unavailable ({e}); falling back to grep walk");
+                search::grep_walk(&self.paths, &self.config, query)
+            }
+        }
     }
 
     /// Report index status.

@@ -17,16 +17,42 @@ use crate::segment::{
     Segment, SegmentWriter, SymbolEntry,
 };
 use crate::trigram::{self, Trigram};
-use crate::walk::{self, WalkEntry};
+use crate::walk::{self, SkipReason, Skipped, WalkEntry};
+
+/// How many skipped-file paths to retain for display. Counts in
+/// `skipped_by_reason` stay exact; this only bounds the per-path sample so a
+/// repo full of binaries/large files can't balloon the stats.
+const SKIP_SAMPLE_CAP: usize = 100;
 
 /// Summary statistics returned by an index operation.
 #[derive(Debug, Default, Clone)]
 pub struct IndexStats {
     pub files_indexed: usize,
+    /// Total files that `grep` would search but greplm left out of the index
+    /// (size/empty/binary/error). Excludes gitignore/hidden pruning, which is
+    /// the configured intent rather than a surprise.
     pub files_skipped: usize,
     pub files_removed: usize,
     pub symbols: usize,
     pub segments: usize,
+    /// Exact count of skips grouped by reason.
+    pub skipped_by_reason: std::collections::BTreeMap<SkipReason, usize>,
+    /// A bounded sample of skipped paths (up to `SKIP_SAMPLE_CAP`) for display.
+    pub skipped_sample: Vec<Skipped>,
+}
+
+impl IndexStats {
+    /// Fold a set of skip records into the stats: bump per-reason counts, keep a
+    /// bounded path sample, and set `files_skipped` to the exact total.
+    fn record_skips(&mut self, skips: impl IntoIterator<Item = Skipped>) {
+        for s in skips {
+            *self.skipped_by_reason.entry(s.reason).or_default() += 1;
+            self.files_skipped += 1;
+            if self.skipped_sample.len() < SKIP_SAMPLE_CAP {
+                self.skipped_sample.push(s);
+            }
+        }
+    }
 }
 
 /// A fully processed file ready to be added to a segment.
@@ -60,10 +86,23 @@ fn count_lines(data: &[u8]) -> u32 {
     }
 }
 
-fn process(entry: &WalkEntry, backend: &dyn IoBackend) -> Result<Option<Processed>> {
-    let data = backend.read(&entry.path)?;
-    if is_binary(&data) {
-        return Ok(None);
+/// Outcome of attempting to process a walked file.
+enum Outcome {
+    /// File was read and prepared for indexing.
+    Indexed(Box<Processed>),
+    /// File was skipped (binary or unreadable); carries the reason.
+    Skipped(SkipReason),
+}
+
+fn process(entry: &WalkEntry, backend: &dyn IoBackend, config: &Config) -> Outcome {
+    let data = match backend.read(&entry.path) {
+        Ok(d) => d,
+        // A read failure (permissions, vanished mid-walk) is a skip, not a hard
+        // error — record it so it's visible rather than silently dropped.
+        Err(_) => return Outcome::Skipped(SkipReason::ReadError),
+    };
+    if !config.index_binary && is_binary(&data) {
+        return Outcome::Skipped(SkipReason::Binary);
     }
     let ext = entry
         .path
@@ -87,7 +126,7 @@ fn process(entry: &WalkEntry, backend: &dyn IoBackend) -> Result<Option<Processe
         hash,
         lines: count_lines(&data),
     };
-    Ok(Some(Processed {
+    Outcome::Indexed(Box::new(Processed {
         rel: entry.rel.clone(),
         inode,
         mtime_ns,
@@ -98,6 +137,28 @@ fn process(entry: &WalkEntry, backend: &dyn IoBackend) -> Result<Option<Processe
         symbols,
         refs,
     }))
+}
+
+/// Run the read/parse stage over `candidates` in parallel, partitioning into
+/// successfully processed files and skip records (binary/unreadable).
+fn process_all(
+    candidates: &[&WalkEntry],
+    backend: &dyn IoBackend,
+    config: &Config,
+) -> (Vec<Processed>, Vec<Skipped>) {
+    let outcomes: Vec<(String, Outcome)> = candidates
+        .par_iter()
+        .map(|e| (e.rel.clone(), process(e, backend, config)))
+        .collect();
+    let mut processed = Vec::with_capacity(outcomes.len());
+    let mut skipped = Vec::new();
+    for (rel, outcome) in outcomes {
+        match outcome {
+            Outcome::Indexed(p) => processed.push(*p),
+            Outcome::Skipped(reason) => skipped.push(Skipped { rel, reason }),
+        }
+    }
+    (processed, skipped)
 }
 
 /// Index builder bound to a project.
@@ -134,12 +195,12 @@ impl<'a> Indexer<'a> {
 
         let cache = Cache::open(&self.paths.cache_file())?;
 
-        let entries = walk::walk(self.paths, self.config)?;
-        let total = entries.len();
-        let processed: Vec<Processed> = entries
-            .par_iter()
-            .filter_map(|e| process(e, self.backend).ok().flatten())
-            .collect();
+        let walk::WalkResult {
+            entries,
+            skipped: walk_skips,
+        } = walk::walk(self.paths, self.config)?;
+        let candidates: Vec<&WalkEntry> = entries.iter().collect();
+        let (processed, proc_skips) = process_all(&candidates, self.backend, self.config);
 
         let seg_id = meta.alloc_segment();
         let mut writer = SegmentWriter::new();
@@ -167,11 +228,13 @@ impl<'a> Indexer<'a> {
 
         let mut stats = IndexStats {
             files_indexed: writer.doc_count(),
-            files_skipped: total - writer.doc_count(),
             files_removed: 0,
             symbols: writer.symbol_count(),
             segments: 0,
+            ..Default::default()
         };
+        stats.record_skips(walk_skips);
+        stats.record_skips(proc_skips);
 
         if writer.is_empty() {
             // Nothing to index; leave an empty manifest.
@@ -237,7 +300,10 @@ impl<'a> Indexer<'a> {
             return self.index_full();
         }
 
-        let entries = walk::walk(self.paths, self.config)?;
+        let walk::WalkResult {
+            entries,
+            skipped: walk_skips,
+        } = walk::walk(self.paths, self.config)?;
         let mut seen: HashMap<String, &WalkEntry> = HashMap::with_capacity(entries.len());
         for e in &entries {
             seen.insert(e.rel.clone(), e);
@@ -255,10 +321,7 @@ impl<'a> Indexer<'a> {
             })
             .collect();
 
-        let processed: Vec<Processed> = candidates
-            .par_iter()
-            .filter_map(|e| process(e, self.backend).ok().flatten())
-            .collect();
+        let (processed, proc_skips) = process_all(&candidates, self.backend, self.config);
 
         // Keep only entries whose content hash actually changed.
         let mut changed: Vec<Processed> = Vec::new();
@@ -346,13 +409,15 @@ impl<'a> Indexer<'a> {
 
         cache.apply(&upserts, &deleted)?;
 
-        let stats = IndexStats {
+        let mut stats = IndexStats {
             files_indexed: changed.len(),
-            files_skipped: entries.len() - changed.len(),
             files_removed: deleted.len(),
             symbols: changed.iter().map(|p| p.symbols.len()).sum(),
             segments: meta.segments.len(),
+            ..Default::default()
         };
+        stats.record_skips(walk_skips);
+        stats.record_skips(proc_skips);
 
         // Maintain index-wide counts incrementally. Each live document maps to
         // exactly one cache record, so the deltas below keep `doc_count` /
@@ -501,10 +566,10 @@ impl<'a> Indexer<'a> {
 
         Ok(IndexStats {
             files_indexed: doc_count,
-            files_skipped: 0,
             files_removed: 0,
             symbols: symbol_count,
             segments: meta.segments.len(),
+            ..Default::default()
         })
     }
 

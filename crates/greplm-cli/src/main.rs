@@ -169,6 +169,18 @@ struct IndexArgs {
     /// Rebuild the entire index from scratch.
     #[arg(long)]
     force: bool,
+    /// Also index binary (NUL-containing) files, like `grep -a`.
+    #[arg(long)]
+    index_binary: bool,
+    /// Also index empty (zero-byte) files.
+    #[arg(long)]
+    index_empty: bool,
+    /// Skip files larger than this many bytes (0 = no limit). Overrides config.
+    #[arg(long)]
+    max_file_size: Option<u64>,
+    /// Print a sample of skipped files and why they were skipped.
+    #[arg(long)]
+    explain_skips: bool,
     /// Emit machine-readable JSON.
     #[arg(long)]
     json: bool,
@@ -204,6 +216,10 @@ struct SearchArgs {
     /// Maximum matches reported per file.
     #[arg(long, default_value_t = 20)]
     max_per_file: usize,
+    /// Return EVERY match (grep parity): no ranking, no limit, no per-file cap.
+    /// Use when completeness matters more than relevance.
+    #[arg(long)]
+    exhaustive: bool,
     /// Emit machine-readable JSON.
     #[arg(long)]
     json: bool,
@@ -634,14 +650,40 @@ fn cmd_init(args: RootArg) -> Result<()> {
 }
 
 fn cmd_index(args: IndexArgs) -> Result<()> {
+    // Translate one-off flags into env overrides, which `Config::load` applies on
+    // top of the persisted config. This keeps a single override path (env) and
+    // avoids mutating `config.toml`.
+    if args.index_binary {
+        std::env::set_var("GREPLM_INDEX_BINARY", "1");
+    }
+    if args.index_empty {
+        std::env::set_var("GREPLM_INDEX_EMPTY", "1");
+    }
+    if let Some(n) = args.max_file_size {
+        std::env::set_var("GREPLM_MAX_FILE_SIZE", n.to_string());
+    }
+
     let g = open_for_index(&args.root)?;
     let start = std::time::Instant::now();
     let stats = g.index(args.force)?;
     let elapsed = start.elapsed();
+
+    // Render the per-reason skip breakdown as e.g. "binary=3, too_large=1".
+    let skip_breakdown = || -> String {
+        stats
+            .skipped_by_reason
+            .iter()
+            .map(|(reason, n)| format!("{}={}", reason.as_str(), n))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
     if args.json {
         let v = serde_json::json!({
             "files_indexed": stats.files_indexed,
             "files_skipped": stats.files_skipped,
+            "skipped_by_reason": stats.skipped_by_reason,
+            "skipped_sample": stats.skipped_sample,
             "files_removed": stats.files_removed,
             "symbols": stats.symbols,
             "segments": stats.segments,
@@ -653,6 +695,22 @@ fn cmd_index(args: IndexArgs) -> Result<()> {
             "indexed {} files ({} symbols), {} removed, {} segment(s) in {:.2?}",
             stats.files_indexed, stats.symbols, stats.files_removed, stats.segments, elapsed
         );
+        if stats.files_skipped > 0 {
+            println!("skipped {} files ({})", stats.files_skipped, skip_breakdown());
+            if args.explain_skips {
+                for s in &stats.skipped_sample {
+                    println!("  {} ({})", s.rel, s.reason.as_str());
+                }
+                if stats.skipped_sample.len() < stats.files_skipped {
+                    println!(
+                        "  ... and {} more",
+                        stats.files_skipped - stats.skipped_sample.len()
+                    );
+                }
+            } else {
+                println!("  (run with --explain-skips to list them)");
+            }
+        }
     }
     Ok(())
 }
@@ -668,10 +726,17 @@ fn cmd_search(args: SearchArgs) -> Result<()> {
         limit: args.limit,
         offset: args.offset,
         max_per_file: args.max_per_file,
+        exhaustive: args.exhaustive,
     };
     let hits: Vec<SearchHit> = match via_daemon(&args.root, Request::Search(query.clone())) {
         Some(r) => r?,
-        None => open_for_query(&args.root)?.searcher()?.search(&query)?,
+        None => {
+            // In-process (no daemon): self-heal a missing index, then search
+            // with a transparent grep fallback if the index is unavailable.
+            let g = open_for_query(&args.root)?;
+            let _ = g.ensure_indexed();
+            g.search_or_grep(&query)?
+        }
     };
     let files: BTreeSet<String> = hits.iter().map(|h| h.path.clone()).collect();
     record_savings(&args.root, "search", files, hits.len() as u64, &hits);

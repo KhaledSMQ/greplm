@@ -53,6 +53,11 @@ struct SearchArgs {
     /// Skip the first N results (pagination).
     #[serde(default)]
     offset: Option<usize>,
+    /// Return EVERY match (grep parity): no ranking, no limit, no per-file cap.
+    /// Use when completeness matters more than relevance; `limit`/`offset` are
+    /// ignored.
+    #[serde(default)]
+    exhaustive: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -201,6 +206,18 @@ fn internal(e: impl std::fmt::Display) -> ErrorData {
     ErrorData::internal_error(e.to_string(), None)
 }
 
+/// Open a project ready to query: discover the index and build it if missing
+/// (self-healing — no "run `greplm index` first" error on a fresh checkout).
+/// Cheap when an index already exists (a single manifest read). Keeping a
+/// running `greplm watch`/`serve` is what keeps the index fresh; we deliberately
+/// don't poll the filesystem here (a full walk + cache open per call costs
+/// ~100ms and would tax every tool invocation).
+fn open_ready(root: &std::path::Path) -> greplm_core::Result<Greplm> {
+    let g = Greplm::discover(root)?;
+    let _ = g.ensure_indexed()?;
+    Ok(g)
+}
+
 /// Record token savings for a query that returns location-style hits: the
 /// unique result files (grep+read baseline) vs. the compact payload returned.
 fn record_savings<T: serde::Serialize>(
@@ -277,6 +294,7 @@ impl GreplmServer {
         ok_json(&serde_json::json!({
             "files_indexed": stats.files_indexed,
             "files_skipped": stats.files_skipped,
+            "skipped_by_reason": stats.skipped_by_reason,
             "files_removed": stats.files_removed,
             "symbols": stats.symbols,
             "segments": stats.segments,
@@ -303,10 +321,12 @@ impl GreplmServer {
             limit: args.limit.unwrap_or(50),
             offset: args.offset.unwrap_or(0),
             max_per_file: 20,
+            exhaustive: args.exhaustive,
         };
         let hits = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = Greplm::discover(&root)?;
-            let hits = g.searcher()?.search(&query)?;
+            let g = open_ready(&root)?;
+            // Falls back to an index-free walk if the index is unavailable.
+            let hits = g.search_or_grep(&query)?;
             record_savings(&g, "search", &hits, |h| h.path.clone());
             Ok(hits)
         })
@@ -333,7 +353,7 @@ impl GreplmServer {
             offset: 0,
         };
         let hits = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = Greplm::discover(&root)?;
+            let g = open_ready(&root)?;
             let hits = g.searcher()?.symbols(&query)?;
             record_savings(&g, "symbols", &hits, |h| h.path.clone());
             Ok(hits)
@@ -355,7 +375,7 @@ impl GreplmServer {
         let root = self.root.clone();
         let file = args.file;
         let hits = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = Greplm::discover(&root)?;
+            let g = open_ready(&root)?;
             g.searcher()?.outline(&file)
         })
         .await
@@ -377,7 +397,7 @@ impl GreplmServer {
         let limit = args.limit.unwrap_or(100);
         let offset = args.offset.unwrap_or(0);
         let hits = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = Greplm::discover(&root)?;
+            let g = open_ready(&root)?;
             let hits = g.searcher()?.references(&name, limit, offset)?;
             record_savings(&g, "refs", &hits, |h| h.path.clone());
             Ok(hits)
@@ -403,7 +423,7 @@ impl GreplmServer {
         let limit = args.limit.unwrap_or(100);
         let offset = args.offset.unwrap_or(0);
         let hits = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = Greplm::discover(&root)?;
+            let g = open_ready(&root)?;
             let hits = g.searcher()?.references_resolved(&name, limit, offset);
             record_savings(&g, "xref", &hits, |h| h.path.clone());
             Ok(hits)
@@ -428,7 +448,7 @@ impl GreplmServer {
         let limit = args.limit.unwrap_or(100);
         let offset = args.offset.unwrap_or(0);
         let hits = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = Greplm::discover(&root)?;
+            let g = open_ready(&root)?;
             let hits = g.searcher()?.callers(&name, limit, offset);
             record_savings(&g, "callers", &hits, |h| h.path.clone());
             Ok(hits)
@@ -452,7 +472,7 @@ impl GreplmServer {
         let limit = args.limit.unwrap_or(100);
         let offset = args.offset.unwrap_or(0);
         let hits = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = Greplm::discover(&root)?;
+            let g = open_ready(&root)?;
             let hits = g.searcher()?.callees(&name, limit, offset);
             record_savings(&g, "callees", &hits, |h| h.path.clone());
             Ok(hits)
@@ -478,7 +498,7 @@ impl GreplmServer {
         let depth = args.depth.unwrap_or(3);
         let limit = args.limit.unwrap_or(200);
         let nodes = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = Greplm::discover(&root)?;
+            let g = open_ready(&root)?;
             let nodes = g.searcher()?.blast_radius(&name, depth, limit);
             record_savings(&g, "impact", &nodes, |n| n.path.clone());
             Ok(nodes)
@@ -500,7 +520,7 @@ impl GreplmServer {
         let root = self.root.clone();
         let (file, line) = (args.file, args.line);
         let b = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = Greplm::discover(&root)?;
+            let g = open_ready(&root)?;
             g.searcher()?.blame(&file, line)
         })
         .await
@@ -521,7 +541,7 @@ impl GreplmServer {
         let name = args.name;
         let limit = args.limit.unwrap_or(20);
         let h = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = Greplm::discover(&root)?;
+            let g = open_ready(&root)?;
             g.searcher()?.symbol_history(&name, limit)
         })
         .await
@@ -542,7 +562,7 @@ impl GreplmServer {
         let root = self.root.clone();
         let rev = args.rev;
         let changed = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = Greplm::discover(&root)?;
+            let g = open_ready(&root)?;
             g.searcher()?.changed_since(&rev)
         })
         .await
@@ -566,7 +586,7 @@ impl GreplmServer {
         let task = args.task;
         let budget = args.budget.unwrap_or(8000);
         let pack = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = Greplm::discover(&root)?;
+            let g = open_ready(&root)?;
             let pack = g.searcher()?.context_pack(&task, budget);
             let files: std::collections::BTreeSet<String> =
                 pack.items.iter().map(|i| i.path.clone()).collect();
@@ -596,7 +616,7 @@ impl GreplmServer {
         let limit = args.limit.unwrap_or(50);
         let offset = args.offset.unwrap_or(0);
         let hits = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = Greplm::discover(&root)?;
+            let g = open_ready(&root)?;
             let hits = g
                 .searcher()?
                 .structural_search(&pattern, &lang, limit, offset)?;
@@ -622,7 +642,7 @@ impl GreplmServer {
         let root = self.root.clone();
         let (file, line, col) = (args.file, args.line, args.col);
         let hits = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = Greplm::discover(&root)?;
+            let g = open_ready(&root)?;
             let hits = g.searcher()?.definition(&file, line, col)?;
             record_savings(&g, "def", &hits, |h| h.path.clone());
             Ok(hits)
@@ -645,7 +665,7 @@ impl GreplmServer {
         let root = self.root.clone();
         let (file, line, col) = (args.file, args.line, args.col);
         let hits = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = Greplm::discover(&root)?;
+            let g = open_ready(&root)?;
             let hits = g.searcher()?.references_of(&file, line, col)?;
             record_savings(&g, "refs-at", &hits, |h| h.path.clone());
             Ok(hits)
@@ -670,7 +690,7 @@ impl GreplmServer {
         let end = args.end.unwrap_or(start);
         let context = args.context.unwrap_or(3);
         let snip = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = Greplm::discover(&root)?;
+            let g = open_ready(&root)?;
             let snip = g.searcher()?.read_snippet(&file, start, end, context)?;
             let returned: u64 = snip.lines.iter().map(|l| l.text.len() as u64 + 1).sum();
             let files: BTreeSet<String> = [snip.path.clone()].into_iter().collect();
@@ -693,7 +713,7 @@ impl GreplmServer {
     ) -> Result<CallToolResult, ErrorData> {
         let root = self.root.clone();
         let summary = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
-            let g = Greplm::discover(&root)?;
+            let g = open_ready(&root)?;
             Ok(g.searcher()?.summary())
         })
         .await
@@ -712,6 +732,7 @@ impl GreplmServer {
     ) -> Result<CallToolResult, ErrorData> {
         let root = self.root.clone();
         let status = tokio::task::spawn_blocking(move || -> greplm_core::Result<_> {
+            // Report the index as-is; never build/refresh just to read status.
             let g = Greplm::discover(&root)?;
             g.status()
         })

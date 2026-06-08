@@ -55,6 +55,11 @@ mod unix_impl {
 
     static ACTIVE_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 
+    /// Debounce window for the background watcher. Short enough to give prompt
+    /// read-after-write freshness (an edit is reflected within ~this latency)
+    /// while still coalescing editor write-bursts into one re-index.
+    const WATCH_DEBOUNCE: Duration = Duration::from_millis(100);
+
     /// RAII guard that tracks the live connection count.
     struct ConnGuard;
     impl Drop for ConnGuard {
@@ -92,7 +97,7 @@ mod unix_impl {
                 .spawn(move || loop {
                     let g_cb = g_watch.clone();
                     let s_cb = s.clone();
-                    let result = g_watch.watch(Duration::from_millis(300), move |_stats| {
+                    let result = g_watch.watch(WATCH_DEBOUNCE, move |_stats| {
                         if let Ok(ns) = g_cb.searcher() {
                             swap_searcher(&s_cb, ns);
                         }
@@ -226,6 +231,12 @@ mod unix_impl {
                 Err(e) => Response::err(e.to_string()),
             },
             other => {
+                // Freshness comes from the background watcher (event-driven,
+                // ~debounce latency), not a per-query filesystem poll: walking
+                // the tree + opening the cache on every read cost ~140ms and
+                // defeated the warm daemon. The watcher hot-swaps the searcher
+                // on change, so reads stay ~sub-ms and reflect edits within the
+                // debounce window.
                 let guard = read_searcher(searcher);
                 match other {
                     Request::Summary => to_resp(serde_json::to_value(guard.summary())),

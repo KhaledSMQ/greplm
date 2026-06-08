@@ -643,3 +643,159 @@ fn interrupted_compaction_is_recovered() {
 
     std::fs::remove_dir_all(&root).ok();
 }
+
+#[test]
+fn exhaustive_returns_every_match_in_order() {
+    let root = temp_dir("exhaustive");
+    // One file with far more matching lines than the default limit (50) and the
+    // per-file cap (20), so the non-exhaustive path must truncate.
+    let body: String = (1..=100).map(|i| format!("let needle_{i} = {i};\n")).collect();
+    write(&root, "src/many.rs", &body);
+
+    let g = Greplm::open(&root).unwrap();
+    g.index(true).unwrap();
+    let searcher = g.searcher().unwrap();
+
+    // Default search truncates (per-file cap = 20).
+    let ranked = searcher
+        .search(&SearchQuery {
+            pattern: "needle".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(ranked.len(), 20, "default search caps per-file matches");
+
+    // Exhaustive returns all 100, sorted by (path, line).
+    let all = searcher
+        .search(&SearchQuery {
+            pattern: "needle".to_string(),
+            exhaustive: true,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(all.len(), 100, "exhaustive returns every matching line");
+    let lines: Vec<u32> = all.iter().map(|h| h.line).collect();
+    let mut sorted = lines.clone();
+    sorted.sort_unstable();
+    assert_eq!(lines, sorted, "exhaustive results are ordered by line");
+    assert_eq!(*lines.first().unwrap(), 1);
+    assert_eq!(*lines.last().unwrap(), 100);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn search_or_grep_falls_back_without_index() {
+    let root = temp_dir("grep-fallback");
+    write(&root, "src/a.rs", "fn alpha() { let token = 1; }\n");
+    write(&root, "src/b.rs", "fn beta() { let token = 2; }\n");
+
+    let g = Greplm::open(&root).unwrap();
+    // No index built: the searcher can't open, so this must fall back to a
+    // working-tree walk and still find both occurrences.
+    assert!(g.searcher().is_err(), "no index should exist yet");
+    let hits = g
+        .search_or_grep(&SearchQuery {
+            pattern: "token".to_string(),
+            exhaustive: true,
+            ..Default::default()
+        })
+        .unwrap();
+    let paths: std::collections::BTreeSet<&str> = hits.iter().map(|h| h.path.as_str()).collect();
+    assert!(paths.contains("src/a.rs") && paths.contains("src/b.rs"), "grep fallback finds both files: {paths:?}");
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn binary_files_skipped_and_recorded_then_opt_in() {
+    use greplm_core::walk::SkipReason;
+    let root = temp_dir("binary-skip");
+    write(&root, "src/text.rs", "fn marker_one() {}\n");
+    // A NUL byte makes this "binary"; it also contains the search marker.
+    std::fs::write(root.join("data.bin"), b"marker_two\x00more").unwrap();
+
+    let g = Greplm::open(&root).unwrap();
+    let stats = g.index(true).unwrap();
+    assert_eq!(stats.files_indexed, 1, "only the text file is indexed by default");
+    assert_eq!(
+        stats.skipped_by_reason.get(&SkipReason::Binary).copied(),
+        Some(1),
+        "the binary file is recorded as a binary skip"
+    );
+    assert!(stats.skipped_sample.iter().any(|s| s.rel == "data.bin"));
+
+    // Opt in via config.toml and the binary content becomes searchable.
+    let root2 = temp_dir("binary-optin");
+    std::fs::create_dir_all(root2.join(".greplm")).unwrap();
+    std::fs::write(root2.join(".greplm/config.toml"), "index_binary = true\n").unwrap();
+    std::fs::write(root2.join("data.bin"), b"marker_two\x00more").unwrap();
+    let g2 = Greplm::open(&root2).unwrap();
+    assert!(g2.config().index_binary, "config opt-in is loaded");
+    let stats2 = g2.index(true).unwrap();
+    assert_eq!(stats2.files_indexed, 1, "binary file now indexed");
+    let hits = g2
+        .searcher()
+        .unwrap()
+        .search(&SearchQuery {
+            pattern: "marker_two".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(!hits.is_empty(), "binary content is searchable when opted in");
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&root2).ok();
+}
+
+#[test]
+fn is_dirty_tracks_working_tree() {
+    let root = temp_dir("dirty");
+    write(&root, "src/a.rs", "fn a() {}\n");
+    write(&root, "src/b.rs", "fn b() {}\n");
+
+    let g = Greplm::open(&root).unwrap();
+    g.index(true).unwrap();
+    assert!(!g.is_dirty().unwrap(), "freshly indexed tree is clean");
+
+    // Modify a file (size changes -> stat key differs).
+    write(&root, "src/a.rs", "fn a() { let x = 1; }\n");
+    assert!(g.is_dirty().unwrap(), "modification is detected");
+    g.index(false).unwrap();
+    assert!(!g.is_dirty().unwrap(), "clean again after reindex");
+
+    // Add a new file.
+    write(&root, "src/c.rs", "fn c() {}\n");
+    assert!(g.is_dirty().unwrap(), "new file is detected");
+    g.index(false).unwrap();
+    assert!(!g.is_dirty().unwrap());
+
+    // Delete a file.
+    std::fs::remove_file(root.join("src/b.rs")).unwrap();
+    assert!(g.is_dirty().unwrap(), "deletion is detected");
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn ensure_indexed_self_heals_missing_index() {
+    let root = temp_dir("self-heal");
+    write(&root, "src/a.rs", "fn findme() {}\n");
+
+    let g = Greplm::open(&root).unwrap();
+    assert!(g.searcher().is_err(), "no index yet");
+    let built = g.ensure_indexed().unwrap();
+    assert!(built, "ensure_indexed builds a missing index");
+    assert!(!g.ensure_indexed().unwrap(), "second call is a no-op");
+    let hits = g
+        .searcher()
+        .unwrap()
+        .search(&SearchQuery {
+            pattern: "findme".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(!hits.is_empty(), "self-healed index is queryable");
+
+    std::fs::remove_dir_all(&root).ok();
+}
