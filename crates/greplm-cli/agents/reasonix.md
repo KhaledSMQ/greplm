@@ -47,7 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/KhaledSMQ/greplm/main/install.sh | 
 
 ### Workflow
 
-1. Run `greplm index` before searching a project (incremental by default).
+1. Run `greplm index` before searching a project (incremental by default). `indexed 0 files` means nothing *changed* since the last run — **not** an empty index; confirm the index is populated with `greplm status`/`greplm summary` (check `files`/`doc_count`) before falling back to grep.
 2. Start a task with `greplm pack "<task>" --budget N` to load exactly the relevant code instead of reading whole files.
 3. Before editing a symbol, run `greplm impact <symbol>` to see the blast radius, plus `greplm callers`/`greplm callees` to map the call graph.
 4. Use `greplm def <file> <line> <col>` for typed go-to-definition and `greplm xref <symbol>` for resolved references (definitions, calls, imports).
