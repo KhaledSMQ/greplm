@@ -18,7 +18,11 @@ excluded from the main stable workspace.
 | `trigram_query` | Trigram extraction + literal/regex query decomposition |
 | `structural_compile` | Structural (AST) query compilation and execution |
 | `symbol_extract` | tree-sitter symbol/reference extraction over arbitrary bytes |
-| `segment_postings` | On-disk postings decode against a corrupt index segment |
+| `segment_corrupt` | On-disk index decode: corrupt FST, postings, docs/syms/refs tables, live bitmap, or `meta.json` |
+| `resolve_ident` | Go-to-definition identifier lookup at arbitrary source positions |
+| `search_match` | Literal/regex match verification over arbitrary pattern + haystack bytes |
+| `meta_decode` | Index manifest (`meta.json`) JSON decode |
+| `cache_record` | Incremental-indexing cache record (postcard + redb) decode |
 
 ## Running
 

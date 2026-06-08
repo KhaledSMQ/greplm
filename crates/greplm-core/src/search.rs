@@ -266,6 +266,27 @@ impl Matcher {
     }
 }
 
+/// Fuzz-only entry: build a literal/regex matcher and scan `hay` for matches.
+#[doc(hidden)]
+pub fn fuzz_match_starts(
+    pattern: &str,
+    hay: &[u8],
+    regex: bool,
+    case_insensitive: bool,
+    whole_word: bool,
+) {
+    let query = SearchQuery {
+        pattern: pattern.to_string(),
+        regex,
+        case_insensitive,
+        whole_word,
+        ..Default::default()
+    };
+    if let Ok(m) = Matcher::build(&query) {
+        let _ = m.match_starts(hay, whole_word, PER_FILE_MATCH_CAP);
+    }
+}
+
 /// Identifier byte for word-boundary checks. Bytes >= 0x80 are treated as
 /// identifier bytes so multibyte UTF-8 (Unicode) identifiers are respected.
 fn is_ident_byte(b: u8) -> bool {

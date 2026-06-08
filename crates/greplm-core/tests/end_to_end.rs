@@ -647,7 +647,7 @@ fn interrupted_compaction_is_recovered() {
 /// A corrupt/truncated postings blob (e.g. an interrupted write or a damaged
 /// `.greplm`) must surface as a clean error and let the grep fallback take
 /// over — never panic with an out-of-range slice index. Regression test for the
-/// `posting_at` bounds bug found by the `segment_postings` fuzz target.
+/// `posting_at` bounds bug found by the `segment_corrupt` fuzz target.
 #[test]
 fn corrupt_postings_blob_errors_cleanly_and_falls_back() {
     let root = temp_dir("corrupt-post");

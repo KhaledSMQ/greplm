@@ -290,6 +290,8 @@ version = "0.0.0"
 dependencies = [
  "greplm-core",
  "libfuzzer-sys",
+ "postcard",
+ "redb",
  "serde_json",
 ]
 

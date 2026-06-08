@@ -32,7 +32,11 @@ jobs:
           - trigram_query
           - structural_compile
           - symbol_extract
-          - segment_postings
+          - segment_corrupt
+          - resolve_ident
+          - search_match
+          - meta_decode
+          - cache_record
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@nightly
