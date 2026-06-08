@@ -644,6 +644,53 @@ fn interrupted_compaction_is_recovered() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// A corrupt/truncated postings blob (e.g. an interrupted write or a damaged
+/// `.greplm`) must surface as a clean error and let the grep fallback take
+/// over — never panic with an out-of-range slice index. Regression test for the
+/// `posting_at` bounds bug found by the `segment_postings` fuzz target.
+#[test]
+fn corrupt_postings_blob_errors_cleanly_and_falls_back() {
+    let root = temp_dir("corrupt-post");
+    write(&root, "src/main.rs", "fn abcabc() {\n    let abc = 1;\n}\n");
+
+    let g = Greplm::open(&root).unwrap();
+    g.index(true).unwrap();
+
+    // Truncate the postings blob to a single byte: the FST term dictionary's
+    // offsets now point past its end, exercising the decode bounds check.
+    let paths = Paths::new(&root);
+    let meta = Meta::load(&paths.meta_file()).unwrap();
+    let seg = *meta.segments.first().expect("one segment");
+    std::fs::write(paths.post_file(seg), b"\x00").unwrap();
+
+    // The segment still opens (its other tables are intact), but querying a
+    // trigram that exists in the corpus must return an error, not panic.
+    let searcher = g.searcher().unwrap();
+    let res = searcher.search(&SearchQuery {
+        pattern: "abc".to_string(),
+        ..Default::default()
+    });
+    assert!(
+        res.is_err(),
+        "corrupt postings must surface as an error, got {res:?}"
+    );
+
+    // The always-answers entry point transparently falls back to a grep walk.
+    let hits = g
+        .search_or_grep(&SearchQuery {
+            pattern: "abc".to_string(),
+            exhaustive: true,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(
+        hits.iter().any(|h| h.path == "src/main.rs"),
+        "grep fallback should still find matches over a corrupt index"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
 #[test]
 fn exhaustive_returns_every_match_in_order() {
     let root = temp_dir("exhaustive");

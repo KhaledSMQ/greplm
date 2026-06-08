@@ -1,0 +1,58 @@
+name: Fuzz
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/greplm-core/**"
+      - "fuzz/**"
+      - ".github/workflows/fuzz.yml"
+  pull_request:
+    paths:
+      - "crates/greplm-core/**"
+      - "fuzz/**"
+      - ".github/workflows/fuzz.yml"
+  # Weekly deeper run to keep finding regressions over time.
+  schedule:
+    - cron: "0 4 * * 1"
+
+concurrency:
+  group: fuzz-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - proto_request
+          - trigram_query
+          - structural_compile
+          - symbol_extract
+          - segment_postings
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - name: Smoke-run ${{ matrix.target }}
+        working-directory: fuzz
+        # 60s per target on push/PR; a longer budget on the weekly schedule.
+        run: |
+          cargo +nightly fuzz run ${{ matrix.target }} -- \
+            -max_total_time=${{ github.event_name == 'schedule' && 600 || 60 }} \
+            -rss_limit_mb=4096
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

@@ -404,8 +404,19 @@ impl Segment {
     }
 
     /// Deserialize the posting list stored at `offset` in the postings blob.
+    ///
+    /// `offset` comes from the FST term dictionary, which on a corrupt or
+    /// truncated index can point past the end of the mmap'd blob. Bounds-check
+    /// it so a bad offset is reported as `Corrupt` (letting the self-healing
+    /// path rebuild) instead of panicking with an out-of-range slice index.
     fn posting_at(&self, offset: u64) -> Result<RoaringBitmap> {
-        let slice = &self.post[offset as usize..];
+        let start = offset as usize;
+        let slice = self.post.get(start..).ok_or_else(|| {
+            Error::Corrupt(format!(
+                "posting offset {start} out of range for postings blob of length {}",
+                self.post.len()
+            ))
+        })?;
         RoaringBitmap::deserialize_from(slice)
             .map_err(|e| Error::Corrupt(format!("posting list: {e}")))
     }

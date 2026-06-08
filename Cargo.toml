@@ -5,6 +5,9 @@ members = [
     "crates/greplm-cli",
     "crates/greplm-mcp",
 ]
+# The fuzz crate is a standalone (nightly-only, libFuzzer) workspace; keep it out
+# of the stable workspace so `cargo build/test --workspace` never pulls it in.
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.1.3"

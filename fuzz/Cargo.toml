@@ -1,0 +1,63 @@
+# Standalone fuzzing workspace for greplm (nightly + libFuzzer via cargo-fuzz).
+#
+# Run a target locally with:
+#   cargo +nightly fuzz run proto_request
+# or a short smoke run (as CI does):
+#   cargo +nightly fuzz run proto_request -- -max_total_time=60
+[package]
+name = "greplm-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+rust-version = "1.90"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Own workspace so the parent (stable) workspace is untouched.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+greplm-core = { path = "../crates/greplm-core" }
+
+[profile.release]
+debug = 1
+
+# Each target is its own libFuzzer binary. `test/doc/bench = false` keeps
+# `cargo test` and friends from trying to build them as ordinary tests.
+[[bin]]
+name = "proto_request"
+path = "fuzz_targets/proto_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "trigram_query"
+path = "fuzz_targets/trigram_query.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "structural_compile"
+path = "fuzz_targets/structural_compile.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "symbol_extract"
+path = "fuzz_targets/symbol_extract.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "segment_postings"
+path = "fuzz_targets/segment_postings.rs"
+test = false
+doc = false
+bench = false
