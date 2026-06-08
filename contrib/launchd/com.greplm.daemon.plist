@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  greplm warm-index daemon as a macOS LaunchAgent.
+
+  This is a TEMPLATE. The @TOKENS@ are filled in by install-launchd.sh; you can
+  also copy it by hand, replacing them yourself:
+    @LABEL@   unique label, e.g. com.greplm.daemon.<hash>
+    @GREPLM@  absolute path to the greplm binary (`command -v greplm`)
+    @ROOT@    absolute path to the project root to serve
+
+  One agent serves one project root. Install the script once per project.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>@LABEL@</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>@GREPLM@</string>
+    <string>serve</string>
+    <string>-C</string>
+    <string>@ROOT@</string>
+  </array>
+
+  <!-- Start at login and keep it running: relaunch if it ever exits. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Low-priority background service (nice + throttled I/O). -->
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <!-- Don't hammer relaunches if it crash-loops. -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>@ROOT@/.greplm/daemon.log</string>
+  <key>StandardErrorPath</key>
+  <string>@ROOT@/.greplm/daemon.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>GREPLM_LOG</key>
+    <string>info</string>
+  </dict>
+</dict>
+</plist>

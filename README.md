@@ -318,8 +318,26 @@ sub-millisecond:
 greplm serve
 ```
 
-While it's running, query commands automatically route to it. Pass `--no-daemon` to force an
-in-process query.
+While it's running, query commands automatically route to it (so does the MCP server). Pass
+`--no-daemon` to force an in-process query.
+
+The daemon is what makes greplm fast for agents: a warm socket query is ~sub-ms, versus ~25ms
+to cold-open the index per call. Keep it running so that advantage is never lost.
+
+#### Keep it always-on
+
+Run the daemon as a background service that starts at login and restarts if it dies.
+
+**macOS (launchd):**
+
+```bash
+contrib/launchd/install-launchd.sh /abs/path/to/project   # defaults to the current dir
+```
+
+**Linux (systemd user service):** see [`contrib/systemd/greplm-daemon@.service`](contrib/systemd/greplm-daemon@.service) for the one-time install (it documents the `systemctl --user enable --now` command).
+
+Both serve one project root per instance, log to `<root>/.greplm/daemon.log`, and print their
+uninstall command.
 
 ### Semantic search (optional)
 

@@ -1,0 +1,30 @@
+# greplm warm-index daemon as a systemd *user* service (Linux).
+#
+# One instance per project; the instance name is the escaped project path.
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp contrib/systemd/greplm-daemon@.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now "greplm-daemon@$(systemd-escape -p /abs/path/to/project).service"
+#
+# Status / logs / stop:
+#   systemctl --user status "greplm-daemon@$(systemd-escape -p /abs/path/to/project).service"
+#   journalctl --user -u  "greplm-daemon@$(systemd-escape -p /abs/path/to/project).service" -f
+#   systemctl --user disable --now "greplm-daemon@..."
+#
+# (Optional, for the daemon to survive logout: `loginctl enable-linger $USER`.)
+
+[Unit]
+Description=greplm warm-index daemon for %I
+After=default.target
+
+[Service]
+Type=simple
+# %I is the unescaped instance name (the project root path).
+ExecStart=/usr/bin/env greplm serve -C %I
+Restart=always
+RestartSec=10
+Environment=GREPLM_LOG=info
+
+[Install]
+WantedBy=default.target
