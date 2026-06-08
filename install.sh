@@ -36,7 +36,7 @@ install_from_cargo() {
     fi
     echo "Building from source with cargo (this may take a few minutes)..."
     # cargo install --root <dir> always writes to <dir>/bin, so build into a
-    # temp root and copy the binaries into install_dir for a consistent layout.
+    # temp root and install the binaries into install_dir for a consistent layout.
     cargo_root="$(mktemp -d)"
     if ! cargo install --locked --root "$cargo_root" --git "https://github.com/${repo}" greplm-cli greplm-mcp; then
         rm -rf "$cargo_root"
@@ -45,9 +45,7 @@ install_from_cargo() {
 
     mkdir -p "$install_dir"
     for name in greplm greplm-mcp; do
-        cp "$cargo_root/bin/$name" "$install_dir/$name"
-        chmod +x "$install_dir/$name"
-        echo "  installed $install_dir/$name"
+        install_binary "$cargo_root/bin/$name" "$name"
     done
     rm -rf "$cargo_root"
 }
@@ -95,8 +93,14 @@ install_binary() {
     fi
 
     mkdir -p "$install_dir"
-    cp "$src" "$dest"
-    chmod +x "$dest"
+    # Install via a temp file + atomic rename (never overwrite in place).
+    # Overwriting a binary in place reuses the same inode, which on macOS
+    # poisons the kernel's cached code signature and makes every launch die
+    # with "SIGKILL (Code Signature Invalid)". A rename gives a fresh inode.
+    tmp_dest="$dest.tmp.$$"
+    cp "$src" "$tmp_dest"
+    chmod +x "$tmp_dest"
+    mv -f "$tmp_dest" "$dest"
     echo "  installed $dest"
 }
 
