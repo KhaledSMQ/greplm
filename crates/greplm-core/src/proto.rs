@@ -3,12 +3,39 @@
 //! Messages are newline-delimited JSON over a Unix domain socket. Each request
 //! is one JSON object on a line; each response is one JSON object on a line.
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use crate::search::{SearchQuery, SymbolQuery};
 
 /// Default socket path relative to a project's `.greplm` directory.
 pub const SOCKET_NAME: &str = "greplmd.sock";
+
+/// Machine-wide (per-user) socket for the global multi-root daemon. One daemon
+/// serves every project the user touches, lazily loading and evicting them, so
+/// running many agents across many repos costs a single background process.
+///
+/// Placed in the per-user runtime/temp dir so it's private to the user and
+/// cleared across reboots. Falls back through `XDG_RUNTIME_DIR` (Linux),
+/// `TMPDIR` (macOS), `~/.cache`, then the system temp dir.
+pub fn global_socket_path() -> PathBuf {
+    let base = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("TMPDIR").map(PathBuf::from))
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("greplm").join(SOCKET_NAME)
+}
+
+/// A request addressed to a specific project root, used by the global daemon
+/// (which serves many roots over one socket). The client resolves `root` to the
+/// project's `.greplm` ancestor before sending.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutedRequest {
+    pub root: PathBuf,
+    pub req: Request,
+}
 
 /// A request from a client to the daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]

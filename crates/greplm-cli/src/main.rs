@@ -7,12 +7,12 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use greplm_core::client::Client;
 use greplm_core::context::ContextPack;
 use greplm_core::git::BlameLine;
-use greplm_core::proto::Request;
+use greplm_core::proto::{Request, Response};
 use greplm_core::search::{
     CallSite, ChangedSymbols, DefHit, ImpactNode, RefHit, RepoSummary, SearchHit, SearchQuery,
     Snippet, StructHit, SymbolHistory, SymbolHit, SymbolQuery,
@@ -441,34 +441,55 @@ struct WatchArgs {
 struct ServeArgs {
     #[command(flatten)]
     root: RootArg,
+    /// Serve EVERY project on this machine from one daemon, loading each lazily
+    /// on first query and evicting idle ones. Listens on the global socket, so a
+    /// single background process covers all your repos. Ignores `-C`.
+    #[arg(long)]
+    global: bool,
 }
 
 fn cwd() -> Result<PathBuf> {
     std::env::current_dir().context("cannot determine current directory")
 }
 
-/// Try to connect to a running daemon for this project (unless suppressed).
-fn daemon_client(root: &RootArg) -> Option<Client> {
+/// Route a request through a running daemon if one can serve it: the global
+/// multi-root daemon first, then a per-project daemon. Returns `None` to signal
+/// the caller should run the query in-process (no daemon, or neither could
+/// serve it).
+fn via_daemon<T: DeserializeOwned>(root: &RootArg, req: Request) -> Option<Result<T>> {
     if root.no_daemon {
         return None;
     }
     let g = open_for_query(root).ok()?;
-    Client::try_connect(&g.socket_path())
-}
 
-/// Route a request through the daemon if one is running. Returns `None` to
-/// signal the caller should run the query in-process.
-fn via_daemon<T: DeserializeOwned>(root: &RootArg, req: Request) -> Option<Result<T>> {
-    let mut client = daemon_client(root)?;
-    Some((|| {
-        let resp = client.request(&req)?;
+    /// Decode an OK response; on a daemon error response, return `None` so the
+    /// caller falls back to the next transport rather than surfacing it.
+    fn decode<T: DeserializeOwned>(resp: Response) -> Option<Result<T>> {
         if resp.ok {
             let v = resp.result.unwrap_or(serde_json::Value::Null);
-            Ok(serde_json::from_value(v)?)
+            Some(serde_json::from_value(v).map_err(Into::into))
         } else {
-            bail!("daemon error: {}", resp.error.unwrap_or_default())
+            None
         }
-    })())
+    }
+
+    // Global daemon (serves every project; addressed by resolved root).
+    if let Some(mut c) = Client::try_connect(&greplm_core::proto::global_socket_path()) {
+        if let Ok(resp) = c.request_routed(g.root(), &req) {
+            if let Some(r) = decode(resp) {
+                return Some(r);
+            }
+        }
+    }
+    // Per-project daemon.
+    if let Some(mut c) = Client::try_connect(&g.socket_path()) {
+        if let Ok(resp) = c.request(&req) {
+            if let Some(r) = decode(resp) {
+                return Some(r);
+            }
+        }
+    }
+    None
 }
 
 fn open_for_index(root: &RootArg) -> Result<Greplm> {
@@ -1262,6 +1283,15 @@ fn cmd_status(args: RootArg) -> Result<()> {
 }
 
 fn cmd_serve(args: ServeArgs) -> Result<()> {
+    if args.global {
+        let socket = greplm_core::proto::global_socket_path();
+        eprintln!(
+            "greplm global daemon: serving all projects on {} (lazy, idle-evicted)",
+            socket.display()
+        );
+        greplm_core::daemon::serve_global(&socket)?;
+        return Ok(());
+    }
     let g = open_for_index(&args.root)?;
     g.ensure_initialized()?;
     let socket = g.socket_path();

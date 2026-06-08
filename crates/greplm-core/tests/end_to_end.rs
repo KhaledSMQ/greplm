@@ -799,3 +799,67 @@ fn ensure_indexed_self_heals_missing_index() {
 
     std::fs::remove_dir_all(&root).ok();
 }
+
+#[cfg(unix)]
+#[test]
+fn global_daemon_serves_multiple_projects() {
+    use greplm_core::client::Client;
+    use greplm_core::proto::Request;
+    use std::time::Duration;
+
+    // Two independent projects.
+    let a = temp_dir("gd-a");
+    write(&a, "src/a.rs", "fn alpha_marker() {}\n");
+    Greplm::open(&a).unwrap().index(true).unwrap();
+    let b = temp_dir("gd-b");
+    write(&b, "src/b.rs", "fn beta_marker() {}\n");
+    Greplm::open(&b).unwrap().index(true).unwrap();
+
+    // One global daemon on a temp socket serves both.
+    let sock = temp_dir("gd-sock").join("g.sock");
+    let s2 = sock.clone();
+    std::thread::spawn(move || {
+        let _ = greplm_core::daemon::serve_global(&s2);
+    });
+    let mut connected = None;
+    for _ in 0..100 {
+        if let Some(c) = Client::try_connect(&sock) {
+            connected = Some(c);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut c = connected.expect("global daemon should accept connections");
+
+    // Project A, lazily loaded on first query.
+    let resp = c
+        .request_routed(
+            &a,
+            &Request::Search(SearchQuery {
+                pattern: "alpha_marker".to_string(),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    assert!(resp.ok, "A query ok: {resp:?}");
+    assert!(resp.result.unwrap().to_string().contains("src/a.rs"));
+
+    // Project B, on the SAME connection / same daemon.
+    let resp = c
+        .request_routed(
+            &b,
+            &Request::Search(SearchQuery {
+                pattern: "beta_marker".to_string(),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    assert!(resp.ok, "B query ok: {resp:?}");
+    let body = resp.result.unwrap().to_string();
+    assert!(body.contains("src/b.rs"));
+    // Isolation: B's results never leak A's files.
+    assert!(!body.contains("src/a.rs"));
+
+    std::fs::remove_dir_all(&a).ok();
+    std::fs::remove_dir_all(&b).ok();
+}

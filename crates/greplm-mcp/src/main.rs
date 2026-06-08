@@ -16,7 +16,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use greplm_core::client::Client;
-use greplm_core::proto::Request;
+use greplm_core::proto::{global_socket_path, Request};
 use greplm_core::search::{SearchQuery, SymbolQuery};
 use greplm_core::Greplm;
 
@@ -220,14 +220,23 @@ where
     F: FnOnce(&Greplm) -> greplm_core::Result<serde_json::Value>,
 {
     let g = Greplm::discover(root).map_err(internal)?;
-    if let Some(mut client) = Client::try_connect(&g.socket_path()) {
-        match client.request(&req) {
-            Ok(resp) if resp.ok => return Ok(resp.result.unwrap_or(serde_json::Value::Null)),
-            Ok(resp) => return Err(internal(resp.error.unwrap_or_default())),
-            // Daemon hiccup (closed connection, bad frame): fall back in-process.
-            Err(_) => {}
+    // Global multi-root daemon first (one process serves every project).
+    if let Some(mut c) = Client::try_connect(&global_socket_path()) {
+        if let Ok(resp) = c.request_routed(g.root(), &req) {
+            if resp.ok {
+                return Ok(resp.result.unwrap_or(serde_json::Value::Null));
+            }
         }
     }
+    // Per-project daemon.
+    if let Some(mut c) = Client::try_connect(&g.socket_path()) {
+        if let Ok(resp) = c.request(&req) {
+            if resp.ok {
+                return Ok(resp.result.unwrap_or(serde_json::Value::Null));
+            }
+        }
+    }
+    // No daemon could serve it: self-heal a missing index, then run in-process.
     let _ = g.ensure_indexed();
     fallback(&g).map_err(internal)
 }

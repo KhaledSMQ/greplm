@@ -1,0 +1,31 @@
+# greplm GLOBAL warm-index daemon as a systemd *user* service (Linux).
+#
+# One process serves every project you touch (lazy load + idle eviction) over a
+# single per-user socket. Prefer this over the per-project template unit.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp contrib/systemd/greplm-global.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now greplm-global.service
+#
+# Status / logs / stop:
+#   systemctl --user status greplm-global.service
+#   journalctl --user -u greplm-global.service -f
+#   systemctl --user disable --now greplm-global.service
+#
+# (Optional, to keep it running after logout: `loginctl enable-linger $USER`.)
+
+[Unit]
+Description=greplm global warm-index daemon (all projects)
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env greplm serve --global
+Restart=always
+RestartSec=10
+Environment=GREPLM_LOG=info
+
+[Install]
+WantedBy=default.target
