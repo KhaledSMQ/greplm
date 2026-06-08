@@ -1,6 +1,6 @@
 //! `greplm agent` — install the bundled agent definition for a coding tool.
 //!
-//! The agent markdown lives in the repo's `agents/` directory and is embedded
+//! The agent markdown lives in this crate's `agents/` directory and is embedded
 //! into the binary at build time, so installation works fully offline (no curl
 //! round-trip) and ships with `cargo install` / release binaries.
 
@@ -28,56 +28,56 @@ const TOOLS: &[AgentTool] = &[
         label: "Claude Code",
         dir: ".claude/agents",
         file: "greplm-search.md",
-        content: include_str!("../../../agents/claude.md"),
+        content: include_str!("../agents/claude.md"),
     },
     AgentTool {
         key: "cursor",
         label: "Cursor",
         dir: ".cursor/agents",
         file: "greplm-search.md",
-        content: include_str!("../../../agents/cursor.md"),
+        content: include_str!("../agents/cursor.md"),
     },
     AgentTool {
         key: "gemini",
         label: "Gemini CLI",
         dir: ".gemini/agents",
         file: "greplm-search.md",
-        content: include_str!("../../../agents/gemini.md"),
+        content: include_str!("../agents/gemini.md"),
     },
     AgentTool {
         key: "copilot",
         label: "GitHub Copilot",
         dir: ".github/agents",
         file: "greplm-search.agent.md",
-        content: include_str!("../../../agents/copilot.md"),
+        content: include_str!("../agents/copilot.md"),
     },
     AgentTool {
         key: "opencode",
         label: "opencode",
         dir: ".opencode/agent",
         file: "greplm-search.md",
-        content: include_str!("../../../agents/opencode.md"),
+        content: include_str!("../agents/opencode.md"),
     },
     AgentTool {
         key: "kiro",
         label: "Kiro",
         dir: ".kiro/agents",
         file: "greplm-search.md",
-        content: include_str!("../../../agents/kiro.md"),
+        content: include_str!("../agents/kiro.md"),
     },
     AgentTool {
         key: "pi",
         label: "Pi",
         dir: ".pi/agents",
         file: "greplm-search.md",
-        content: include_str!("../../../agents/pi.md"),
+        content: include_str!("../agents/pi.md"),
     },
     AgentTool {
         key: "reasonix",
         label: "Reasonix",
         dir: ".reasonix/agents",
         file: "greplm-search.md",
-        content: include_str!("../../../agents/reasonix.md"),
+        content: include_str!("../agents/reasonix.md"),
     },
 ];
 

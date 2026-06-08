@@ -134,7 +134,7 @@ Supported tools and where the file lands (project scope; pass `--global` for the
 | Reasonix       | `reasonix`      | `.reasonix/agents/greplm-search.md`      |
 
 Use `--force` to overwrite an existing file. The raw definitions also live in
-[`agents/`](agents) if you prefer to copy them manually. Restart the tool (or start a new
+[`crates/greplm-cli/agents/`](crates/greplm-cli/agents) if you prefer to copy them manually. Restart the tool (or start a new
 session) so it picks up the new agent.
 
 ## Quick start
