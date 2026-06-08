@@ -289,6 +289,15 @@ impl Segment {
         let fst_file = std::fs::File::open(&fst_path).map_err(|e| Error::io(&fst_path, e))?;
         let fst_mmap = unsafe { Mmap::map(&fst_file).map_err(|e| Error::io(&fst_path, e))? };
         let fst = fst::Map::new(fst_mmap)?;
+        // `Map::new` only validates the FST header/length, not the node graph.
+        // A corrupt or truncated `.fst` whose header survives would otherwise
+        // panic with an out-of-bounds index deep in the fst crate's traversal
+        // (`Node::new`) on the first query. Verify the stored checksum up front
+        // so corruption surfaces as `Corrupt` (triggering the self-healing
+        // rebuild) instead of an abort.
+        fst.as_fst()
+            .verify()
+            .map_err(|e| Error::Corrupt(format!("fst checksum: {e}")))?;
 
         let post_path = paths.post_file(seg_id);
         let post_file = std::fs::File::open(&post_path).map_err(|e| Error::io(&post_path, e))?;
