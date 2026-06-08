@@ -218,8 +218,7 @@ impl<'a> Indexer<'a> {
             Err(e @ (Error::Corrupt(_) | Error::Json(_))) => {
                 tracing::warn!("index manifest unusable ({e}); rebuilding from scratch");
                 Meta {
-                    next_segment_id: max_segment_id_on_disk(self.paths)
-                        .map_or(0, |id| id + 1),
+                    next_segment_id: max_segment_id_on_disk(self.paths).map_or(0, |id| id + 1),
                     ..Meta::default()
                 }
             }
