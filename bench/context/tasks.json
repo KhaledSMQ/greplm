@@ -1,0 +1,10 @@
+{
+  "tasks": [
+    { "id": "incremental-indexing", "task": "how does incremental indexing detect changed files" },
+    { "id": "call-graph", "task": "how are call graph edges and references resolved" },
+    { "id": "structural-search", "task": "structural AST search with tree-sitter queries" },
+    { "id": "context-pack", "task": "build a token budgeted context pack for a task" },
+    { "id": "segment-compaction", "task": "merge and compact segments on disk" },
+    { "id": "daemon-protocol", "task": "warm daemon request dispatch over a unix socket" }
+  ]
+}

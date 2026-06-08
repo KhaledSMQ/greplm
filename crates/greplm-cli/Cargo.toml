@@ -1,0 +1,27 @@
+[package]
+name = "greplm-cli"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "greplm command-line interface."
+
+[[bin]]
+name = "greplm"
+path = "src/main.rs"
+
+[features]
+default = []
+# Optional offline semantic (vector) search.
+semantic = ["greplm-core/semantic"]
+
+[dependencies]
+anyhow = "1.0.102"
+clap = { version = "4.6.1", features = ["derive"] }
+greplm-core = { path = "../greplm-core", version = "0.1.0" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

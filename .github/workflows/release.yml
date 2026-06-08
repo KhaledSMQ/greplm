@@ -1,0 +1,122 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binaries
+        run: cargo build --release --target ${{ matrix.target }} -p greplm-cli -p greplm-mcp
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          dest="greplm-${{ matrix.target }}"
+          mkdir -p "$dest"
+          cp "target/${{ matrix.target }}/release/greplm" "$dest/"
+          cp "target/${{ matrix.target }}/release/greplm-mcp" "$dest/"
+          tar -czf "${dest}.tar.gz" -C "$dest" greplm greplm-mcp
+          shasum -a 256 "${dest}.tar.gz" > "${dest}.tar.gz.sha256"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dest = "greplm-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $dest | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/greplm.exe" $dest
+          Copy-Item "target/${{ matrix.target }}/release/greplm-mcp.exe" $dest
+          Compress-Archive -Path "$dest/*" -DestinationPath "$dest.zip"
+          $hash = (Get-FileHash "$dest.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $dest.zip" | Out-File -Encoding ascii "$dest.zip.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: greplm-${{ matrix.target }}
+          path: |
+            greplm-${{ matrix.target }}.tar.gz
+            greplm-${{ matrix.target }}.tar.gz.sha256
+            greplm-${{ matrix.target }}.zip
+            greplm-${{ matrix.target }}.zip.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+
+  publish-crates:
+    name: Publish to crates.io
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish crates (in dependency order)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          # crates.io is eventually consistent: after publishing greplm-core the
+          # new version can take a moment to appear in the index, so a dependent
+          # `cargo publish` may fail to resolve it. Retry a few times to ride out
+          # that propagation window instead of failing the whole release.
+          publish() {
+            local crate="$1"
+            local attempt
+            for attempt in 1 2 3 4 5 6; do
+              if cargo publish --locked -p "$crate"; then
+                return 0
+              fi
+              echo "::warning::cargo publish -p $crate failed (attempt $attempt); retrying in 30s"
+              sleep 30
+            done
+            echo "::error::cargo publish -p $crate failed after retries"
+            return 1
+          }
+          publish greplm-core
+          publish greplm-cli
+          publish greplm-mcp

@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 450 150" width="450" height="150">
+  <defs>
+    <linearGradient id="aiGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8B5CF6" /> <!-- Vibrant Purple -->
+      <stop offset="100%" stop-color="#3B82F6" /> <!-- AI Blue -->
+    </linearGradient>
+
+    <style>
+      .bg { fill: none; }
+      .code-line { stroke: #94A3B8; stroke-width: 6; stroke-linecap: round; }
+      .match { stroke: #10B981; stroke-width: 6; stroke-linecap: round; }
+      .cursor { fill: #10B981; }
+      .text-grep { 
+        font-family: 'Fira Code', 'JetBrains Mono', 'Courier New', monospace; 
+        font-size: 56px; 
+        font-weight: 700; 
+        fill: #0F172A; /* Near Black for light backgrounds */
+      }
+      .text-lm { 
+        font-family: 'Inter', -apple-system, sans-serif; 
+        font-size: 56px; 
+        font-weight: 900; 
+        letter-spacing: -2px;
+        fill: url(#aiGradient); 
+      }
+      @media (prefers-color-scheme: dark) {
+        .text-grep { 
+          fill: #F8FAFC;
+        }
+        .code-line { 
+          stroke: #475569;
+        }
+      }
+    </style>
+  </defs>
+  <rect width="450" height="150" class="bg" />
+
+  <g transform="translate(30, 35)">
+    <line x1="10" y1="15" x2="60" y2="15" class="code-line" />
+    <line x1="10" y1="35" x2="80" y2="35" class="code-line" />
+    <line x1="10" y1="55" x2="35" y2="55" class="code-line" />
+    <line x1="45" y1="55" x2="70" y2="55" class="match" />
+
+    <rect x="78" y="47" width="4" height="16" rx="1" class="cursor">
+      <animate attributeName="opacity" values="1;0;1" dur="1s" repeatCount="indefinite"/>
+    </rect>
+    <path d="M75 12 C75 22 90 27 90 27 C90 27 75 32 75 42 C75 32 60 27 60 27 C60 27 75 22 75 12" fill="url(#aiGradient)" />
+    <path d="M95 5 C95 11 103 14 103 14 C103 14 95 17 95 23 C95 17 87 14 87 14 C87 14 95 11 95 5" fill="#3B82F6" />
+  </g>
+  <text x="145" y="94" class="text-grep">grep</text>
+  <text x="285" y="94" class="text-lm">lm</text>
+</svg>

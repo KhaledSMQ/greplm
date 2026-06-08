@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/greplm-core",
+    "crates/greplm-cli",
+    "crates/greplm-mcp",
+]
+
+[workspace.package]
+version = "0.1.0"
+authors = ["Khaled Sameer"]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/KhaledSMQ/greplm"
+rust-version = "1.90"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+# Unwind (rather than abort) on panic so a single panicking query in the
+# multi-threaded `greplm serve` daemon only tears down that one connection's
+# thread instead of killing the whole server for every client.
+panic = "unwind"
+strip = true

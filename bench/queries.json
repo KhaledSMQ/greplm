@@ -1,0 +1,21 @@
+{
+  "_about": "Self-contained, reproducible query set for benchmarking greplm against itself. Each entry is a literal identifier or phrase that a coding agent would realistically grep for, and that genuinely occurs in this repository's source. The benchmark uses ripgrep as the ground-truth 'grep + read the whole file' baseline, so no external repo, model, or third-party tool is required.",
+  "queries": [
+    { "id": "segment-writer",   "query": "SegmentWriter" },
+    { "id": "search-query",     "query": "SearchQuery" },
+    { "id": "symbol-hit",       "query": "SymbolHit" },
+    { "id": "record-savings",   "query": "record_savings" },
+    { "id": "via-daemon",       "query": "via_daemon" },
+    { "id": "model2vec",        "query": "Model2VecEmbedder" },
+    { "id": "hash-embedder",    "query": "HashEmbedder" },
+    { "id": "line-range-chars", "query": "line_range_chars" },
+    { "id": "trigram",          "query": "trigram" },
+    { "id": "context-pack",     "query": "ContextPack" },
+    { "id": "open-for-query",   "query": "open_for_query" },
+    { "id": "embedder-trait",   "query": "trait Embedder" },
+    { "id": "structural-ast",   "query": "tree_sitter" },
+    { "id": "ref-kind",         "query": "RefKind" },
+    { "id": "callers-callees",  "query": "callees" },
+    { "id": "blast-radius",     "query": "blast" }
+  ]
+}
