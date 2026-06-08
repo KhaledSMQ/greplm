@@ -13,6 +13,60 @@ use crate::error::{Error, Result};
 
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Deterministic crash/fault injection for the atomic-write path.
+///
+/// This is a test seam, not a public feature: it is `#[doc(hidden)]` and a
+/// no-op (one relaxed atomic load) unless explicitly armed, so it has no
+/// practical cost in production. It lets the durability tests simulate a process
+/// crash *just before* the Nth atomic write is published, then verify the index
+/// recovers to a correct, complete state — proving the temp→fsync→rename
+/// discipline and the manifest/cache recovery guards actually hold.
+///
+/// Once armed at index `n`, that write and every subsequent write fail, which
+/// faithfully models a crash: after the process dies, no further writes happen.
+#[doc(hidden)]
+pub mod faults {
+    use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+
+    use crate::error::{Error, Result};
+
+    const DISABLED: i64 = -1;
+    static FAIL_AT: AtomicI64 = AtomicI64::new(DISABLED);
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+
+    /// Arm injection so the atomic write at zero-based index `n` — and every
+    /// write after it — fails. Resets the write counter.
+    pub fn arm(n: u64) {
+        COUNT.store(0, Ordering::SeqCst);
+        FAIL_AT.store(n as i64, Ordering::SeqCst);
+    }
+
+    /// Disable injection and reset the counter.
+    pub fn disarm() {
+        FAIL_AT.store(DISABLED, Ordering::SeqCst);
+        COUNT.store(0, Ordering::SeqCst);
+    }
+
+    /// Number of atomic writes the guard has observed since the last arm.
+    pub fn writes_seen() -> u64 {
+        COUNT.load(Ordering::SeqCst)
+    }
+
+    /// Invoked at the start of each atomic write. Fast path is a single relaxed
+    /// load when disarmed; only counts and compares once armed.
+    pub(super) fn guard() -> Result<()> {
+        if FAIL_AT.load(Ordering::Relaxed) == DISABLED {
+            return Ok(());
+        }
+        let n = COUNT.fetch_add(1, Ordering::SeqCst) as i64;
+        let target = FAIL_AT.load(Ordering::SeqCst);
+        if target != DISABLED && n >= target {
+            return Err(Error::other(format!("injected crash at atomic write #{n}")));
+        }
+        Ok(())
+    }
+}
+
 /// Build a unique temporary path beside `path`.
 fn tmp_path(path: &Path) -> std::path::PathBuf {
     let n = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -30,6 +84,7 @@ fn tmp_path(path: &Path) -> std::path::PathBuf {
 
 /// Atomically write `bytes` to `path` (write temp, fsync, rename, fsync dir).
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    faults::guard()?;
     let tmp = tmp_path(path);
     let res = (|| {
         let mut f = std::fs::File::create(&tmp).map_err(|e| Error::io(&tmp, e))?;
@@ -78,6 +133,9 @@ impl AtomicFile {
 
     /// Flush, fsync, and atomically rename into the final path.
     pub fn commit(mut self) -> Result<()> {
+        // Crash injection point: returning early here leaves `self.file` set, so
+        // `Drop` cleans up the temp file — modelling a crash before the rename.
+        faults::guard()?;
         // `file` is always `Some` here: `commit` takes `self` by value and
         // nothing else clears it, so the only way to reach a rename is with a
         // freshly fsynced file.

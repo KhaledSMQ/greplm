@@ -34,6 +34,12 @@ pub mod watch;
 
 pub use error::{Error, Result};
 
+/// Test-only crash/fault-injection seam for the atomic-write path (see
+/// [`fsutil::faults`]). Hidden from public docs; used by greplm's own
+/// durability tests to simulate crashes mid-index/compaction.
+#[doc(hidden)]
+pub use fsutil::faults;
+
 use std::path::{Path, PathBuf};
 
 use config::Config;
