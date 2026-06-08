@@ -767,7 +767,11 @@ fn cmd_index(args: IndexArgs) -> Result<()> {
             stats.files_indexed, stats.symbols, stats.files_removed, stats.segments, elapsed
         );
         if stats.files_skipped > 0 {
-            println!("skipped {} files ({})", stats.files_skipped, skip_breakdown());
+            println!(
+                "skipped {} files ({})",
+                stats.files_skipped,
+                skip_breakdown()
+            );
             if args.explain_skips {
                 for s in &stats.skipped_sample {
                     println!("  {} ({})", s.rel, s.reason.as_str());

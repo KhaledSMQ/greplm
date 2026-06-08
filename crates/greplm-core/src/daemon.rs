@@ -391,7 +391,12 @@ mod unix_impl {
     /// use. The first query for a project pays the index-open cost; subsequent
     /// queries are served warm until the project is evicted for being idle.
     fn get_or_load(reg: &Registry, root: &Path) -> Result<Arc<Entry>> {
-        if let Some(e) = reg.read().unwrap_or_else(|e| e.into_inner()).get(root).cloned() {
+        if let Some(e) = reg
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(root)
+            .cloned()
+        {
             e.touch();
             return Ok(e);
         }
@@ -452,7 +457,10 @@ mod unix_impl {
                 let mut w = reg.write().unwrap_or_else(|e| e.into_inner());
                 let stale: Vec<PathBuf> = w
                     .iter()
-                    .filter(|(_, e)| now.saturating_sub(e.last_used.load(Ordering::Relaxed)) >= IDLE_TIMEOUT.as_secs())
+                    .filter(|(_, e)| {
+                        now.saturating_sub(e.last_used.load(Ordering::Relaxed))
+                            >= IDLE_TIMEOUT.as_secs()
+                    })
                     .map(|(k, _)| k.clone())
                     .collect();
                 for k in stale {

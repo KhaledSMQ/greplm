@@ -30,7 +30,9 @@ pub struct WalkEntry {
 /// by `.gitignore`/hidden rules are removed inside the `ignore` crate before the
 /// closure runs and are therefore *not* itemized here (by design — that pruning
 /// is the configured intent, not a surprise).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum SkipReason {
     /// Larger than `max_file_size`.

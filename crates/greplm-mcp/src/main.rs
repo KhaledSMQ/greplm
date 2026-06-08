@@ -215,7 +215,11 @@ fn internal(e: impl std::fmt::Display) -> ErrorData {
 ///
 /// The cold fallback self-heals a missing index (so a fresh checkout still
 /// works without `greplm index`) before running `fallback` in-process.
-fn served<F>(root: &std::path::Path, req: Request, fallback: F) -> Result<serde_json::Value, ErrorData>
+fn served<F>(
+    root: &std::path::Path,
+    req: Request,
+    fallback: F,
+) -> Result<serde_json::Value, ErrorData>
 where
     F: FnOnce(&Greplm) -> greplm_core::Result<serde_json::Value>,
 {
@@ -422,7 +426,11 @@ impl GreplmServer {
         let v = tokio::task::spawn_blocking(move || {
             served(
                 &root,
-                Request::Refs { name: name.clone(), limit, offset },
+                Request::Refs {
+                    name: name.clone(),
+                    limit,
+                    offset,
+                },
                 |g| {
                     let hits = g.searcher()?.references(&name, limit, offset)?;
                     record_savings(g, "refs", &hits, |h| h.path.clone());
@@ -452,7 +460,11 @@ impl GreplmServer {
         let v = tokio::task::spawn_blocking(move || {
             served(
                 &root,
-                Request::RefsResolved { name: name.clone(), limit, offset },
+                Request::RefsResolved {
+                    name: name.clone(),
+                    limit,
+                    offset,
+                },
                 |g| {
                     let hits = g.searcher()?.references_resolved(&name, limit, offset);
                     record_savings(g, "xref", &hits, |h| h.path.clone());
@@ -481,7 +493,11 @@ impl GreplmServer {
         let v = tokio::task::spawn_blocking(move || {
             served(
                 &root,
-                Request::Callers { name: name.clone(), limit, offset },
+                Request::Callers {
+                    name: name.clone(),
+                    limit,
+                    offset,
+                },
                 |g| {
                     let hits = g.searcher()?.callers(&name, limit, offset);
                     record_savings(g, "callers", &hits, |h| h.path.clone());
@@ -509,7 +525,11 @@ impl GreplmServer {
         let v = tokio::task::spawn_blocking(move || {
             served(
                 &root,
-                Request::Callees { name: name.clone(), limit, offset },
+                Request::Callees {
+                    name: name.clone(),
+                    limit,
+                    offset,
+                },
                 |g| {
                     let hits = g.searcher()?.callees(&name, limit, offset);
                     record_savings(g, "callees", &hits, |h| h.path.clone());
@@ -539,7 +559,11 @@ impl GreplmServer {
         let v = tokio::task::spawn_blocking(move || {
             served(
                 &root,
-                Request::BlastRadius { name: name.clone(), depth, limit },
+                Request::BlastRadius {
+                    name: name.clone(),
+                    depth,
+                    limit,
+                },
                 |g| {
                     let nodes = g.searcher()?.blast_radius(&name, depth, limit);
                     record_savings(g, "impact", &nodes, |n| n.path.clone());
@@ -563,9 +587,14 @@ impl GreplmServer {
         let root = self.root.clone();
         let (file, line) = (args.file, args.line);
         let v = tokio::task::spawn_blocking(move || {
-            served(&root, Request::Blame { file: file.clone(), line }, |g| {
-                Ok(serde_json::to_value(g.searcher()?.blame(&file, line)?)?)
-            })
+            served(
+                &root,
+                Request::Blame {
+                    file: file.clone(),
+                    line,
+                },
+                |g| Ok(serde_json::to_value(g.searcher()?.blame(&file, line)?)?),
+            )
         })
         .await
         .map_err(internal)??;
@@ -584,9 +613,18 @@ impl GreplmServer {
         let name = args.name;
         let limit = args.limit.unwrap_or(20);
         let v = tokio::task::spawn_blocking(move || {
-            served(&root, Request::History { name: name.clone(), limit }, |g| {
-                Ok(serde_json::to_value(g.searcher()?.symbol_history(&name, limit)?)?)
-            })
+            served(
+                &root,
+                Request::History {
+                    name: name.clone(),
+                    limit,
+                },
+                |g| {
+                    Ok(serde_json::to_value(
+                        g.searcher()?.symbol_history(&name, limit)?,
+                    )?)
+                },
+            )
         })
         .await
         .map_err(internal)??;
@@ -631,7 +669,10 @@ impl GreplmServer {
         let v = tokio::task::spawn_blocking(move || {
             served(
                 &root,
-                Request::ContextPack { task: task.clone(), budget },
+                Request::ContextPack {
+                    task: task.clone(),
+                    budget,
+                },
                 |g| {
                     let pack = g.searcher()?.context_pack(&task, budget);
                     let files: std::collections::BTreeSet<String> =
@@ -673,7 +714,9 @@ impl GreplmServer {
                     offset,
                 },
                 |g| {
-                    let hits = g.searcher()?.structural_search(&pattern, &lang, limit, offset)?;
+                    let hits = g
+                        .searcher()?
+                        .structural_search(&pattern, &lang, limit, offset)?;
                     record_savings(g, "ast", &hits, |h| h.path.clone());
                     Ok(serde_json::to_value(hits)?)
                 },
@@ -699,7 +742,11 @@ impl GreplmServer {
         let v = tokio::task::spawn_blocking(move || {
             served(
                 &root,
-                Request::Definition { file: file.clone(), line, col },
+                Request::Definition {
+                    file: file.clone(),
+                    line,
+                    col,
+                },
                 |g| {
                     let hits = g.searcher()?.definition(&file, line, col)?;
                     record_savings(g, "def", &hits, |h| h.path.clone());
@@ -726,7 +773,11 @@ impl GreplmServer {
         let v = tokio::task::spawn_blocking(move || {
             served(
                 &root,
-                Request::ReferencesAt { file: file.clone(), line, col },
+                Request::ReferencesAt {
+                    file: file.clone(),
+                    line,
+                    col,
+                },
                 |g| {
                     let hits = g.searcher()?.references_of(&file, line, col)?;
                     record_savings(g, "refs-at", &hits, |h| h.path.clone());
@@ -755,7 +806,12 @@ impl GreplmServer {
         let v = tokio::task::spawn_blocking(move || {
             served(
                 &root,
-                Request::Snippet { file: file.clone(), start, end, context },
+                Request::Snippet {
+                    file: file.clone(),
+                    start,
+                    end,
+                    context,
+                },
                 |g| {
                     let snip = g.searcher()?.read_snippet(&file, start, end, context)?;
                     let returned: u64 = snip.lines.iter().map(|l| l.text.len() as u64 + 1).sum();

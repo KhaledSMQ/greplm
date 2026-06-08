@@ -1466,7 +1466,11 @@ fn verify_doc(
     };
 
     // Exhaustive search lifts the pathological-input cap so no match is dropped.
-    let cap = if exhaustive { usize::MAX } else { PER_FILE_MATCH_CAP };
+    let cap = if exhaustive {
+        usize::MAX
+    } else {
+        PER_FILE_MATCH_CAP
+    };
     let matches = matcher.match_starts(&data, whole_word, cap);
     if matches.is_empty() {
         return Vec::new();
@@ -1661,7 +1665,11 @@ pub fn grep_walk(paths: &Paths, config: &Config, query: &SearchQuery) -> Result<
     let whole_word = query.whole_word;
     let exhaustive = query.exhaustive;
     let index_binary = config.index_binary;
-    let cap = if exhaustive { usize::MAX } else { PER_FILE_MATCH_CAP };
+    let cap = if exhaustive {
+        usize::MAX
+    } else {
+        PER_FILE_MATCH_CAP
+    };
 
     let mut hits: Vec<SearchHit> = walked
         .entries

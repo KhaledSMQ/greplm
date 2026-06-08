@@ -22,13 +22,14 @@ use crate::Greplm;
 /// The loop is resilient: a failed incremental index is logged and the watcher
 /// keeps running, and watcher-level errors are logged rather than silently
 /// dropped. It returns only when the watcher is dropped/disconnected.
-pub fn run<F: FnMut(&IndexStats)>(
-    greplm: &Greplm,
-    debounce: Duration,
-    on_change: F,
-) -> Result<()> {
+pub fn run<F: FnMut(&IndexStats)>(greplm: &Greplm, debounce: Duration, on_change: F) -> Result<()> {
     // A flag that never flips: the watcher runs until the channel disconnects.
-    run_cancellable(greplm, debounce, Arc::new(AtomicBool::new(false)), on_change)
+    run_cancellable(
+        greplm,
+        debounce,
+        Arc::new(AtomicBool::new(false)),
+        on_change,
+    )
 }
 
 /// Like [`run`], but exits promptly when `stop` is set. The global daemon uses

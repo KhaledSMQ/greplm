@@ -58,14 +58,19 @@ fn note(msg: &str) {
 /// Diagnose common problems and, with `fix`, repair the safe ones (build/refresh
 /// a missing or stale index, install the daemon service).
 pub fn doctor(root: &Path, fix: bool) -> Result<()> {
-    println!("greplm doctor  (v{CURRENT_VERSION}){}\n", if fix { "  [--fix]" } else { "" });
+    println!(
+        "greplm doctor  (v{CURRENT_VERSION}){}\n",
+        if fix { "  [--fix]" } else { "" }
+    );
     let mut problems = 0usize;
     let mut fixed = 0usize;
 
     // 1. Up to date?
     match latest_version() {
         Ok(latest) if is_newer(&latest, CURRENT_VERSION) => {
-            warn(&format!("a newer version {latest} is available (you have v{CURRENT_VERSION})"));
+            warn(&format!(
+                "a newer version {latest} is available (you have v{CURRENT_VERSION})"
+            ));
             println!("      fix: greplm update");
             problems += 1;
         }
@@ -78,7 +83,10 @@ pub fn doctor(root: &Path, fix: bool) -> Result<()> {
     println!("  project: {}", g.root().display());
     match g.status() {
         Ok(s) if s.indexed => {
-            ok(&format!("index present ({} files, {} symbols)", s.doc_count, s.symbol_count));
+            ok(&format!(
+                "index present ({} files, {} symbols)",
+                s.doc_count, s.symbol_count
+            ));
             match g.is_dirty() {
                 Ok(true) if fix => {
                     g.index(false)?;
@@ -145,12 +153,20 @@ pub fn doctor(root: &Path, fix: bool) -> Result<()> {
     if problems == 0 {
         println!(
             "\u{2713} healthy{}",
-            if fixed > 0 { format!(" ({fixed} fixed)") } else { String::new() }
+            if fixed > 0 {
+                format!(" ({fixed} fixed)")
+            } else {
+                String::new()
+            }
         );
     } else {
         println!(
             "{problems} issue(s) remaining{}.",
-            if fixed > 0 { format!(", {fixed} fixed") } else { String::new() }
+            if fixed > 0 {
+                format!(", {fixed} fixed")
+            } else {
+                String::new()
+            }
         );
     }
     Ok(())
@@ -233,7 +249,8 @@ fn is_newer(latest: &str, current: &str) -> bool {
 fn ver_tuple(s: &str) -> (u64, u64, u64) {
     let s = s.trim().trim_start_matches('v');
     let mut it = s.split(['.', '-', '+']);
-    let next = |it: &mut std::str::Split<[char; 3]>| it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+    let next =
+        |it: &mut std::str::Split<[char; 3]>| it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
     (next(&mut it), next(&mut it), next(&mut it))
 }
 
@@ -325,7 +342,9 @@ fn install_systemd(exe: &Path) -> Result<()> {
     );
     let path = format!("{dir}/greplm-global.service");
     std::fs::write(&path, unit).with_context(|| format!("writing {path}"))?;
-    let _ = Command::new("systemctl").args(["--user", "daemon-reload"]).status();
+    let _ = Command::new("systemctl")
+        .args(["--user", "daemon-reload"])
+        .status();
     let st = Command::new("systemctl")
         .args(["--user", "enable", "--now", "greplm-global.service"])
         .status()

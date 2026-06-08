@@ -35,7 +35,11 @@ mod stub_impl {
         }
 
         /// Always errors: no daemon is available on this platform.
-        pub fn request_routed(&mut self, _root: &std::path::Path, _req: &Request) -> Result<Response> {
+        pub fn request_routed(
+            &mut self,
+            _root: &std::path::Path,
+            _req: &Request,
+        ) -> Result<Response> {
             Err(Error::other(
                 "greplm daemon is not supported on this platform",
             ))

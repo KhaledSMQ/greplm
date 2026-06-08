@@ -649,7 +649,9 @@ fn exhaustive_returns_every_match_in_order() {
     let root = temp_dir("exhaustive");
     // One file with far more matching lines than the default limit (50) and the
     // per-file cap (20), so the non-exhaustive path must truncate.
-    let body: String = (1..=100).map(|i| format!("let needle_{i} = {i};\n")).collect();
+    let body: String = (1..=100)
+        .map(|i| format!("let needle_{i} = {i};\n"))
+        .collect();
     write(&root, "src/many.rs", &body);
 
     let g = Greplm::open(&root).unwrap();
@@ -702,7 +704,10 @@ fn search_or_grep_falls_back_without_index() {
         })
         .unwrap();
     let paths: std::collections::BTreeSet<&str> = hits.iter().map(|h| h.path.as_str()).collect();
-    assert!(paths.contains("src/a.rs") && paths.contains("src/b.rs"), "grep fallback finds both files: {paths:?}");
+    assert!(
+        paths.contains("src/a.rs") && paths.contains("src/b.rs"),
+        "grep fallback finds both files: {paths:?}"
+    );
 
     std::fs::remove_dir_all(&root).ok();
 }
@@ -717,7 +722,10 @@ fn binary_files_skipped_and_recorded_then_opt_in() {
 
     let g = Greplm::open(&root).unwrap();
     let stats = g.index(true).unwrap();
-    assert_eq!(stats.files_indexed, 1, "only the text file is indexed by default");
+    assert_eq!(
+        stats.files_indexed, 1,
+        "only the text file is indexed by default"
+    );
     assert_eq!(
         stats.skipped_by_reason.get(&SkipReason::Binary).copied(),
         Some(1),
@@ -742,7 +750,10 @@ fn binary_files_skipped_and_recorded_then_opt_in() {
             ..Default::default()
         })
         .unwrap();
-    assert!(!hits.is_empty(), "binary content is searchable when opted in");
+    assert!(
+        !hits.is_empty(),
+        "binary content is searchable when opted in"
+    );
 
     std::fs::remove_dir_all(&root).ok();
     std::fs::remove_dir_all(&root2).ok();
