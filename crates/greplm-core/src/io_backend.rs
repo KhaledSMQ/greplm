@@ -58,5 +58,12 @@ mod uring {
 
 /// Select a backend based on configuration and build features.
 pub fn default_backend() -> Box<dyn IoBackend> {
-    Box::new(RayonBackend)
+    #[cfg(all(feature = "io-uring", target_os = "linux"))]
+    {
+        Box::new(uring::UringBackend)
+    }
+    #[cfg(not(all(feature = "io-uring", target_os = "linux")))]
+    {
+        Box::new(RayonBackend)
+    }
 }
