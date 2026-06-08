@@ -36,12 +36,21 @@ creates the GitHub release, and publishes the crates to crates.io (see
   `[workspace.dependencies]`, so the published version requirement can no longer
   drift from the actual workspace version.
 - Improved JSON output handling across `greplm-cli` and `greplm-core`.
+- On-disk segment side tables (`docs`/`syms`/`refs`) now use the compact binary
+  `postcard` encoding instead of JSON, cutting both index size and cold-start
+  parse time on large trees. Bumps the on-disk schema to v3 (existing indexes are
+  transparently rebuilt on the next index operation).
 
 ### Fixed
 
 - Reading a corrupt or truncated postings blob no longer panics: a malformed
   posting offset now surfaces as a recoverable `Corrupt` error and falls back to a
   direct scan instead of an out-of-bounds slice. (Found by fuzzing.)
+- A full index build (`index_full`) no longer silently swallows a real IO error
+  while reading the manifest: genuine read failures now propagate, an
+  unparseable/version-mismatched manifest warns and recovers the segment-id
+  counter by scanning existing segment files (so a rebuild can't clobber a
+  still-live segment), and only a missing manifest falls back to defaults.
 
 ## [0.1.3] - 2026-06-08
 

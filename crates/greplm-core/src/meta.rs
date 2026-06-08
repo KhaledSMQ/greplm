@@ -8,8 +8,10 @@ use crate::error::{Error, Result};
 
 /// On-disk format version. Bump when the segment layout changes.
 ///
-/// v2 added the per-segment `seg-N.refs` reference/call-edge table.
-pub const SCHEMA_VERSION: u32 = 2;
+/// - v2 added the per-segment `seg-N.refs` reference/call-edge table.
+/// - v3 switched the `docs`/`syms`/`refs` side tables from JSON to postcard
+///   (compact binary) to cut on-disk size and cold-start parse time.
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Index-wide manifest describing the set of live segments.
 #[derive(Debug, Clone, Serialize, Deserialize)]

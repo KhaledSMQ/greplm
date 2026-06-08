@@ -24,6 +24,25 @@ use crate::walk::{self, SkipReason, Skipped, WalkEntry};
 /// repo full of binaries/large files can't balloon the stats.
 const SKIP_SAMPLE_CAP: usize = 100;
 
+/// Highest segment id with files on disk, parsed from `seg-NNNNNN.*` names.
+///
+/// Used as a fallback when the manifest is unreadable so a rebuild keeps
+/// allocating fresh ids and never overwrites a segment that the still-live
+/// (pre-swap) index depends on.
+fn max_segment_id_on_disk(paths: &Paths) -> Option<u64> {
+    let entries = std::fs::read_dir(paths.segments_dir()).ok()?;
+    entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name();
+            let name = name.to_str()?;
+            let rest = name.strip_prefix("seg-")?;
+            let digits = rest.split('.').next()?;
+            digits.parse::<u64>().ok()
+        })
+        .max()
+}
+
 /// Summary statistics returned by an index operation.
 #[derive(Debug, Default, Clone)]
 pub struct IndexStats {
@@ -188,9 +207,24 @@ impl<'a> Indexer<'a> {
         std::fs::create_dir_all(self.paths.segments_dir())
             .map_err(|e| Error::io(self.paths.segments_dir(), e))?;
 
-        // Continue the segment-id counter from any existing manifest so the new
-        // segment never collides with the old files we're about to replace.
-        let mut meta = Meta::load(&self.paths.meta_file()).unwrap_or_default();
+        // Continue the segment-id counter from the existing manifest so the new
+        // segment never collides with the old files we're about to replace. A
+        // genuinely unreadable manifest (malformed JSON or a schema-version bump)
+        // can't be trusted for the counter, so warn and recover it by scanning
+        // the segments directory for the highest live id. A real IO error reading
+        // the manifest is propagated rather than silently producing an empty index.
+        let mut meta = match Meta::load(&self.paths.meta_file()) {
+            Ok(meta) => meta,
+            Err(e @ (Error::Corrupt(_) | Error::Json(_))) => {
+                tracing::warn!("index manifest unusable ({e}); rebuilding from scratch");
+                Meta {
+                    next_segment_id: max_segment_id_on_disk(self.paths)
+                        .map_or(0, |id| id + 1),
+                    ..Meta::default()
+                }
+            }
+            Err(e) => return Err(e),
+        };
         let old_segments = std::mem::take(&mut meta.segments);
 
         let cache = Cache::open(&self.paths.cache_file())?;

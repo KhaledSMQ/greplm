@@ -3,9 +3,9 @@
 //! Each segment is a set of files:
 //!   * `seg-N.fst`  - an FST mapping each trigram (3 bytes) to a byte offset
 //!   * `seg-N.post` - concatenated roaring bitmaps (posting lists) at those offsets
-//!   * `seg-N.docs` - JSON array of [`DocMeta`] (one per document)
-//!   * `seg-N.syms` - JSON array of [`SymbolEntry`]
-//!   * `seg-N.refs` - JSON array of [`RefEntry`] (call sites + imports)
+//!   * `seg-N.docs` - postcard-encoded `Vec<`[`DocMeta`]`>` (one per document)
+//!   * `seg-N.syms` - postcard-encoded `Vec<`[`SymbolEntry`]`>`
+//!   * `seg-N.refs` - postcard-encoded `Vec<`[`RefEntry`]`>` (call sites + imports)
 //!   * `seg-N.live` - a roaring bitmap of live (non-tombstoned) doc IDs
 //!
 //! The FST and postings blob are mmap'd for zero-copy, page-cache-backed reads.
@@ -46,10 +46,12 @@ pub struct SymbolEntry {
     pub line_start: u32,
     pub line_end: u32,
     /// Enclosing named container (e.g. the class a method belongs to).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// No `skip_serializing_if`: the side tables use postcard, a
+    /// non-self-describing format where every field must be encoded
+    /// unconditionally or the byte stream desyncs from the reader's schema.
     pub container: Option<String>,
     /// Compact one-line signature.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
 }
 
@@ -204,9 +206,12 @@ fn write_segment_files(
     fst_out.commit()?;
 
     write_atomic(&paths.post_file(seg_id), post_blob)?;
-    write_atomic(&paths.docs_file(seg_id), &serde_json::to_vec(docs)?)?;
-    write_atomic(&paths.syms_file(seg_id), &serde_json::to_vec(syms)?)?;
-    write_atomic(&paths.refs_file(seg_id), &serde_json::to_vec(refs)?)?;
+    // Side tables use postcard (compact binary) rather than JSON: on large trees
+    // these dominate on-disk size and cold-start parse time. The hot path (FST +
+    // roaring + mmap) is unaffected.
+    write_atomic(&paths.docs_file(seg_id), &postcard::to_allocvec(docs)?)?;
+    write_atomic(&paths.syms_file(seg_id), &postcard::to_allocvec(syms)?)?;
+    write_atomic(&paths.refs_file(seg_id), &postcard::to_allocvec(refs)?)?;
 
     // Initially every doc is live.
     let mut live = RoaringBitmap::new();
@@ -290,20 +295,20 @@ impl Segment {
         let post = unsafe { Mmap::map(&post_file).map_err(|e| Error::io(&post_path, e))? };
 
         let docs_path = paths.docs_file(seg_id);
-        let docs: Vec<DocMeta> = serde_json::from_slice(
+        let docs: Vec<DocMeta> = postcard::from_bytes(
             &std::fs::read(&docs_path).map_err(|e| Error::io(&docs_path, e))?,
         )?;
 
         let syms_path = paths.syms_file(seg_id);
-        let syms: Vec<SymbolEntry> = serde_json::from_slice(
+        let syms: Vec<SymbolEntry> = postcard::from_bytes(
             &std::fs::read(&syms_path).map_err(|e| Error::io(&syms_path, e))?,
         )?;
 
-        // Refs were added in schema v2. Tolerate a missing file (treat as no
-        // refs) so an older segment can still be opened read-only.
+        // Tolerate a missing refs file (treat as no refs) so a segment written
+        // without any references can still be opened read-only.
         let refs_path = paths.refs_file(seg_id);
         let refs: Vec<RefEntry> = match std::fs::read(&refs_path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)?,
+            Ok(bytes) => postcard::from_bytes(&bytes)?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(e) => return Err(Error::io(&refs_path, e)),
         };
