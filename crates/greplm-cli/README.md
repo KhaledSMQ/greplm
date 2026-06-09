@@ -117,22 +117,28 @@ Every command accepts `-C, --root <dir>` (target another project), `--no-daemon`
 
 | Command | Description |
 |---------|-------------|
-| `greplm agent add [tool]` | Install bundled agent definitions (Cursor, Claude, etc.) |
-| `greplm agent list` | List supported tools and destinations |
+| `greplm agent add [tool]` | Install the bundled subagent + main-loop guidance (Cursor, Claude, etc.) |
+| `greplm agent list` | List supported tools, subagents, and rules destinations |
 
 Run `greplm <command> --help` for the full flag list.
 
 ## Agent files
 
-greplm ships ready-made agent definitions that teach coding tools to reach for `greplm` instead of raw grep:
+greplm ships ready-made definitions that teach coding tools to reach for `greplm` instead of raw
+grep. Each `agent add` installs two things: a delegated **subagent** (`.../greplm-search.md`) and a
+greplm-first block in the tool's always-on **memory file** (`CLAUDE.md`, `AGENTS.md`,
+`.cursor/rules/greplm.mdc`, …) that steers the main loop:
 
 ```bash
-greplm agent add cursor          # install into .cursor/agents/
-greplm agent add claude --global # install into ~/.claude/agents/
+greplm agent add cursor          # .cursor/agents/ + .cursor/rules/greplm.mdc
+greplm agent add claude --global # ~/.claude/agents/ + ~/.claude/CLAUDE.md
+greplm agent add                 # auto-detect (falls back to AGENTS.md)
 greplm agent list
 ```
 
-Definitions live in [`agents/`](agents/) and are embedded in the binary.
+The memory block is delimited by `<!-- greplm:begin -->`/`<!-- greplm:end -->` markers, so installs
+are idempotent, your content is preserved, and `--force` refreshes only that block. Subagent
+definitions live in [`agents/`](agents/) and are embedded in the binary.
 
 ## Warm daemon
 

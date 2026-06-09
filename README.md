@@ -172,8 +172,11 @@ greplm agent add                 # teach your editor to prefer greplm over grep
 ```
 
 `greplm mcp config` prints ready-to-paste JSON to stdout (with hints on where to put it).
-`greplm agent add` auto-detects `.cursor/`, `.claude/`, `.github/`, and other tool
-directories. Run `greplm welcome` anytime to see the checklist again.
+`greplm agent add` installs a code-search subagent **and** writes a greplm-first block into
+your editor's always-on memory file (`CLAUDE.md`, `AGENTS.md`, `.cursor/rules/`, …) so the main
+loop prefers greplm over grep by default. It auto-detects `.cursor/`, `.claude/`, `.github/`, and
+unambiguous memory files like `CLAUDE.md`, falling back to `AGENTS.md` when nothing is detected.
+Run `greplm welcome` anytime to see the checklist again.
 
 See the [MCP guide](docs/mcp.md) for client paths and the full list of exposed tools.
 

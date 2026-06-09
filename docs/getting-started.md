@@ -74,35 +74,44 @@ Definitions rank first in `refs`; without `--path`, doc files that mention the i
 
 Re-run `greplm index` after changes (it's incremental), or keep it automatic with `greplm watch`.
 
-## Add the agent file
+## Add the agent files
 
-greplm ships ready-made agent definitions that teach your coding tool to reach for `greplm`
-instead of raw grep. The definitions are baked into the binary, so installing one is a single
-offline command:
+`greplm agent add` installs **two** things per tool, both baked into the binary (fully offline):
+
+1. **A subagent** (`.../greplm-search.md`) — a delegated code-search agent the main loop can call.
+2. **Main-loop guidance** — a short, greplm-first block written into the tool's always-on memory
+   file (`CLAUDE.md`, `AGENTS.md`, `.cursor/rules/greplm.mdc`, …). This is what makes the *primary*
+   agent prefer `greplm` over raw grep by default; the subagent alone only runs when the main agent
+   chooses to delegate to it.
 
 ```bash
-greplm agent add cursor          # install into .cursor/agents/ for this project
-greplm agent add claude --global # install into ~/.claude/agents/ for every project
-greplm agent add                 # auto-detect from existing tool directories
-greplm agent list                # show every supported tool and its destination
+greplm agent add cursor          # subagent + .cursor/rules/greplm.mdc for this project
+greplm agent add claude --global # ~/.claude/agents + ~/.claude/CLAUDE.md for every project
+greplm agent add                 # auto-detect the editor (dot-dir or memory file)
+greplm agent list                # show every tool, its subagent, and its rules destination
 ```
 
-Supported tools and where the file lands (project scope; pass `--global` for the home directory):
+Supported tools (project scope; pass `--global` for the home directory):
 
-| Tool           | `agent add` key | Destination                              |
-|----------------|-----------------|------------------------------------------|
-| Claude Code    | `claude`        | `.claude/agents/greplm-search.md`        |
-| Cursor         | `cursor`        | `.cursor/agents/greplm-search.md`        |
-| Gemini CLI     | `gemini`        | `.gemini/agents/greplm-search.md`        |
-| GitHub Copilot | `copilot`       | `.github/agents/greplm-search.agent.md`  |
-| opencode       | `opencode`      | `.opencode/agent/greplm-search.md`       |
-| Kiro           | `kiro`          | `.kiro/agents/greplm-search.md`          |
-| Pi             | `pi`            | `.pi/agents/greplm-search.md`            |
-| Reasonix       | `reasonix`      | `.reasonix/agents/greplm-search.md`      |
+| Tool           | `agent add` key | Subagent                                 | Main-loop guidance              |
+|----------------|-----------------|------------------------------------------|---------------------------------|
+| Claude Code    | `claude`        | `.claude/agents/greplm-search.md`        | `CLAUDE.md`                     |
+| Cursor         | `cursor`        | `.cursor/agents/greplm-search.md`        | `.cursor/rules/greplm.mdc`      |
+| Gemini CLI     | `gemini`        | `.gemini/agents/greplm-search.md`        | `GEMINI.md`                     |
+| GitHub Copilot | `copilot`       | `.github/agents/greplm-search.agent.md`  | `.github/copilot-instructions.md` |
+| opencode       | `opencode`      | `.opencode/agent/greplm-search.md`       | `AGENTS.md`                     |
+| Kiro           | `kiro`          | `.kiro/agents/greplm-search.md`          | `.kiro/steering/greplm.md`      |
+| Pi             | `pi`            | `.pi/agents/greplm-search.md`            | `AGENTS.md`                     |
+| Reasonix       | `reasonix`      | `.reasonix/agents/greplm-search.md`      | `AGENTS.md`                     |
 
-Use `--force` to overwrite an existing file. The raw definitions also live in
-[`crates/greplm-cli/agents/`](../crates/greplm-cli/agents) if you prefer to copy them manually.
-Restart the tool (or start a new session) so it picks up the new agent.
+**Auto-detection** keys off either the tool's dot-directory (`.cursor/`, `.claude/`, …) or an
+*unambiguous* root memory file (`CLAUDE.md`, `GEMINI.md`). If nothing is detected, `greplm agent add`
+falls back to the cross-tool **`AGENTS.md`** so the project is still configured.
+
+The guidance is wrapped in `<!-- greplm:begin -->`/`<!-- greplm:end -->` markers: re-running is
+idempotent, your own content is never clobbered, and `--force` refreshes just that block in place.
+The raw definitions also live in [`crates/greplm-cli/agents/`](../crates/greplm-cli/agents) if you
+prefer to copy them manually. Restart the tool (or start a new session) so it picks up the changes.
 
 ## Requirements
 

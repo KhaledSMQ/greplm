@@ -76,5 +76,5 @@ Requires a git repo.
 |-----------------------|--------------------------------------|-------------------------------------------------------|
 | `greplm welcome`      | —                                    | Show first-run checklist (MCP config, agent files, search) |
 | `greplm mcp config`   | `[--pretty] [-q/--quiet]`            | Print copy-paste MCP client JSON (stdout) with paste hints (stderr) |
-| `greplm agent add`    | `[tool] [--global] [--force]`        | Install the bundled agent file (auto-detects the tool when omitted) |
-| `greplm agent list`   | `[--global]`                         | List supported tools and their destination paths      |
+| `greplm agent add`    | `[tool] [--global] [--force]`        | Install the bundled subagent **and** main-loop guidance for a tool (auto-detects when omitted; falls back to `AGENTS.md`). `--force` refreshes the guidance block in place |
+| `greplm agent list`   | `[--global]`                         | List supported tools with their subagent and rules (memory-file) destinations |

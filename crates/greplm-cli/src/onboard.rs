@@ -96,32 +96,25 @@ fn print_box(title: &str, subtitle: Option<&str>, t: &Term) {
 
 fn print_step(num: &str, title: &str, cmd: &str, hint: &str, t: &Term) {
     println!();
-    println!(
-        "  {}  {}",
-        t.yellow(num),
-        t.bold(title)
-    );
-    println!(
-        "     {}",
-        t.green(&format!("$ {cmd}"))
-    );
+    println!("  {}  {}", t.yellow(num), t.bold(title));
+    println!("     {}", t.green(&format!("$ {cmd}")));
     if !hint.is_empty() {
         println!("     {}", t.dim(hint));
     }
 }
 
 fn print_kv(key: &str, value: &str, t: &Term) {
-    println!(
-        "  {:<18}{}",
-        t.dim(&format!("{key}:")),
-        t.cyan(value)
-    );
+    println!("  {:<18}{}", t.dim(&format!("{key}:")), t.cyan(value));
 }
 
 /// Compact success line after `greplm setup` finishes indexing / daemon work.
 pub fn print_setup_summary(built: bool, root: &Path) {
     let t = Term::stdout();
-    let action = if built { "Indexed" } else { "Verified index for" };
+    let action = if built {
+        "Indexed"
+    } else {
+        "Verified index for"
+    };
     println!();
     println!(
         "  {}  {} {}",
@@ -159,7 +152,7 @@ pub fn print_next_steps(root: &Path) {
         "②",
         "Teach your editor to use greplm",
         "greplm agent add",
-        "auto-detects Cursor, Claude, Copilot, Gemini, …",
+        "subagent + main-loop rules (CLAUDE.md / AGENTS.md / …)",
         &t,
     );
     print_step(
