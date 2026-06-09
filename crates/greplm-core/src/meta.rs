@@ -11,7 +11,10 @@ use crate::error::{Error, Result};
 /// - v2 added the per-segment `seg-N.refs` reference/call-edge table.
 /// - v3 switched the `docs`/`syms`/`refs` side tables from JSON to postcard
 ///   (compact binary) to cut on-disk size and cold-start parse time.
-pub const SCHEMA_VERSION: u32 = 3;
+/// - v4 packs each posting list's cardinality into the FST value alongside its
+///   offset, so query planning can intersect rarest-first without touching the
+///   postings blob.
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Index-wide manifest describing the set of live segments.
 #[derive(Debug, Clone, Serialize, Deserialize)]

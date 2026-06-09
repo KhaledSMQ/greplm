@@ -1,6 +1,6 @@
 //! Index construction: full builds, hash-gated incremental updates, compaction.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
 use rayon::prelude::*;
 use roaring::RoaringBitmap;
@@ -82,7 +82,8 @@ struct Processed {
     size: u64,
     hash: u64,
     doc: DocMeta,
-    trigrams: BTreeSet<trigram::Trigram>,
+    /// Distinct trigrams, sorted (see [`trigram::extract`]).
+    trigrams: Vec<trigram::Trigram>,
     symbols: Vec<RawSymbol>,
     refs: Vec<RawRef>,
 }
@@ -238,15 +239,13 @@ impl<'a> Indexer<'a> {
         let seg_id = meta.alloc_segment();
         let mut writer = SegmentWriter::new();
         let mut upserts = Vec::with_capacity(processed.len());
-        for pf in &processed {
-            let doc_id = writer.add_doc(
-                pf.doc.clone(),
-                &pf.trigrams,
-                pf.symbols.clone(),
-                pf.refs.clone(),
-            );
+        // Consume `processed` by value: the symbol/ref tables are String-heavy
+        // and cloning them per file used to dominate this loop's cost.
+        for pf in processed {
+            let symbols = pf.symbols.len() as u32;
+            let doc_id = writer.add_doc(pf.doc, &pf.trigrams, pf.symbols, pf.refs);
             upserts.push((
-                pf.rel.clone(),
+                pf.rel,
                 FileRecord {
                     inode: pf.inode,
                     mtime_ns: pf.mtime_ns,
@@ -254,7 +253,7 @@ impl<'a> Indexer<'a> {
                     hash: pf.hash,
                     segment_id: seg_id,
                     doc_id,
-                    symbols: pf.symbols.len() as u32,
+                    symbols,
                 },
             ));
         }
@@ -409,52 +408,10 @@ impl<'a> Indexer<'a> {
             self.tombstone(*seg_id, doc_ids)?;
         }
 
-        // Write changed/new files into a fresh delta segment. Only allocate a
-        // segment id when there is actually something to write, so no-op
-        // incrementals don't burn ids.
-        let mut upserts = touch_only;
-        if !changed.is_empty() {
-            let seg_id = meta.alloc_segment();
-            let mut writer = SegmentWriter::new();
-            for pf in &changed {
-                let doc_id = writer.add_doc(
-                    pf.doc.clone(),
-                    &pf.trigrams,
-                    pf.symbols.clone(),
-                    pf.refs.clone(),
-                );
-                upserts.push((
-                    pf.rel.clone(),
-                    FileRecord {
-                        inode: pf.inode,
-                        mtime_ns: pf.mtime_ns,
-                        size: pf.size,
-                        hash: pf.hash,
-                        segment_id: seg_id,
-                        doc_id,
-                        symbols: pf.symbols.len() as u32,
-                    },
-                ));
-            }
-            writer.write(self.paths, seg_id)?;
-            meta.segments.push(seg_id);
-        }
-
-        cache.apply(&upserts, &deleted)?;
-
-        let mut stats = IndexStats {
-            files_indexed: changed.len(),
-            files_removed: deleted.len(),
-            symbols: changed.iter().map(|p| p.symbols.len()).sum(),
-            segments: meta.segments.len(),
-            ..Default::default()
-        };
-        stats.record_skips(walk_skips);
-        stats.record_skips(proc_skips);
-
         // Maintain index-wide counts incrementally. Each live document maps to
         // exactly one cache record, so the deltas below keep `doc_count` /
         // `symbol_count` exact without re-opening and re-parsing every segment.
+        // Computed before `changed` is consumed by the segment writer.
         let mut doc_count = meta.doc_count as i64;
         let mut sym_count = meta.symbol_count as i64;
         for path in &deleted {
@@ -473,6 +430,51 @@ impl<'a> Indexer<'a> {
             }
             sym_count += pf.symbols.len() as i64;
         }
+
+        let changed_count = changed.len();
+        let changed_symbols: usize = changed.iter().map(|p| p.symbols.len()).sum();
+
+        // Write changed/new files into a fresh delta segment. Only allocate a
+        // segment id when there is actually something to write, so no-op
+        // incrementals don't burn ids. `changed` is consumed by value so the
+        // String-heavy symbol/ref tables move into the writer instead of being
+        // cloned per file.
+        let mut upserts = touch_only;
+        if !changed.is_empty() {
+            let seg_id = meta.alloc_segment();
+            let mut writer = SegmentWriter::new();
+            for pf in changed {
+                let symbols = pf.symbols.len() as u32;
+                let doc_id = writer.add_doc(pf.doc, &pf.trigrams, pf.symbols, pf.refs);
+                upserts.push((
+                    pf.rel,
+                    FileRecord {
+                        inode: pf.inode,
+                        mtime_ns: pf.mtime_ns,
+                        size: pf.size,
+                        hash: pf.hash,
+                        segment_id: seg_id,
+                        doc_id,
+                        symbols,
+                    },
+                ));
+            }
+            writer.write(self.paths, seg_id)?;
+            meta.segments.push(seg_id);
+        }
+
+        cache.apply(&upserts, &deleted)?;
+
+        let mut stats = IndexStats {
+            files_indexed: changed_count,
+            files_removed: deleted.len(),
+            symbols: changed_symbols,
+            segments: meta.segments.len(),
+            ..Default::default()
+        };
+        stats.record_skips(walk_skips);
+        stats.record_skips(proc_skips);
+
         meta.doc_count = doc_count.max(0) as u64;
         meta.symbol_count = sym_count.max(0) as u64;
         meta.record_git_head(&self.paths.root);

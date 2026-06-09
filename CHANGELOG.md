@@ -11,6 +11,44 @@ creates the GitHub release, and publishes the crates to crates.io (see
 
 ## [Unreleased]
 
+### Changed
+
+- **Query planning is cardinality-aware** (index schema v4; old indexes rebuild
+  automatically): each posting list's cardinality is packed into the trigram FST
+  value, so AND-groups intersect only their ~4 rarest trigrams, rarest first,
+  without touching the postings blob to plan.
+- **Case-insensitive search keeps its trigram filter on `s`/`k` needles**: windows
+  containing `s`/`k` previously degraded to full scans (their Unicode fold class
+  includes `ſ`/`K`); the planner now enumerates the multi-byte fold variants, so
+  common needles like `class`, `list`, and `make` stay index-accelerated with no
+  false negatives.
+- **Regex queries are filtered by required suffix literals too**, not just prefix
+  literals — patterns like `fn \w+_handler` now prune candidates instead of
+  scanning every file.
+- **Ranked search verifies best-first and stops early**: candidates are verified
+  in descending max-possible-score order and verification halts once the
+  requested page provably cannot change, instead of reading every candidate file.
+- **Daemon hot-swaps are incremental and wait-free**: the shared searcher is now
+  an `ArcSwap` (queries never block on a reload), and reloads reuse unchanged
+  segments and the warm content cache instead of re-parsing the whole index.
+- **Symbol/path lookups are indexed**: per-segment name → symbol/reference maps
+  and a path → document map replace full-table scans in definitions, resolved
+  references, callers, blast radius, outline, and changed-since.
+- **Single-pass response serialization**: the daemon serializes each result once
+  (`RawValue`), clients parse it straight into typed results, and the MCP server
+  forwards daemon payloads verbatim.
+- **`search_code`/`find_references` MCP payloads are grouped by file**
+  (`{path, lang, hits: [[line, col, text], …]}`), stating each path/language once
+  instead of once per hit to cut tokens on multi-hit files.
+- Trigram extraction uses a sort/dedup vector pipeline instead of a `BTreeSet`,
+  and indexing no longer clones every file's symbol/reference tables into the
+  segment writer.
+
+### Fixed
+
+- `impact_of` (blast radius) now stops expanding the call graph as soon as the
+  node limit is reached instead of finishing the current depth level.
+
 ## [0.3.0] - 2026-06-09
 
 ### Added

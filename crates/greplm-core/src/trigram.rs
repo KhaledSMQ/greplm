@@ -5,58 +5,75 @@
 //! contain *every* trigram of the query literal, so we can intersect posting
 //! lists to get a small candidate set before verifying with the real matcher.
 
-use std::collections::BTreeSet;
-
 /// A trigram, stored big-endian so byte order matches numeric order (required
 /// for the FST term dictionary, whose keys must be lexicographically sorted).
 pub type Trigram = [u8; 3];
 
-/// Extract the set of distinct trigrams present in `data`.
-pub fn extract(data: &[u8]) -> BTreeSet<Trigram> {
-    let mut set = BTreeSet::new();
+/// One AND-group of trigrams: a document must contain every member.
+pub type TrigramGroup = Vec<Trigram>;
+
+/// A disjunction of AND-groups (disjunctive normal form): a document passes
+/// when at least one group is fully present.
+pub type TrigramDnf = Vec<TrigramGroup>;
+
+fn key_of(w: &[u8]) -> u32 {
+    (u32::from(w[0]) << 16) | (u32::from(w[1]) << 8) | u32::from(w[2])
+}
+
+fn tri_of(key: u32) -> Trigram {
+    [(key >> 16) as u8, (key >> 8) as u8, key as u8]
+}
+
+/// Extract the distinct trigrams present in `data`, sorted ascending.
+///
+/// Each 3-byte window is encoded as a `u32` key, then the keys are
+/// sorted/deduped in one pass. This is dramatically cheaper than per-window
+/// tree insertion (the previous `BTreeSet` approach) and the big-endian
+/// encoding means the sorted order is exactly the lexicographic order the FST
+/// term dictionary requires.
+pub fn extract(data: &[u8]) -> Vec<Trigram> {
     if data.len() < 3 {
-        return set;
+        return Vec::new();
     }
-    // Each 3-byte window is one trigram; the BTreeSet dedups duplicates and keeps
-    // keys sorted, which the FST term dictionary requires.
-    for w in data.windows(3) {
-        set.insert([w[0], w[1], w[2]]);
-    }
-    set
+    let mut keys: Vec<u32> = Vec::with_capacity(data.len() - 2);
+    keys.extend(data.windows(3).map(key_of));
+    keys.sort_unstable();
+    keys.dedup();
+    keys.into_iter().map(tri_of).collect()
 }
 
 /// Extract the trigrams of a literal needle, sorted and deduplicated. Returns an
 /// empty vec when the needle is shorter than 3 bytes (meaning: trigram filtering
 /// can't help and the caller must scan all candidates).
 pub fn literal_trigrams(needle: &[u8]) -> Vec<Trigram> {
-    extract(needle).into_iter().collect()
+    extract(needle)
 }
 
-/// A boolean query over trigrams supporting two complementary shapes:
+/// A boolean query over trigrams: a conjunction of DNFs. A document is a
+/// candidate when it satisfies *every* DNF, where a DNF is satisfied when at
+/// least one of its AND-groups is fully present in the document.
 ///
-/// * `or_groups` is disjunctive normal form (DNF): each inner group is an AND of
-///   trigrams and the outer set is an OR of groups. Used for exact literals and
-///   regex required-literal alternations.
-/// * `and_clauses` is conjunctive normal form (CNF): each inner clause is an OR
-///   of trigrams and a document must satisfy *every* clause. Used for
-///   case-insensitive literals, where each needle position contributes the OR of
-///   its case variants.
+/// This one shape expresses everything the planner produces:
 ///
-/// A document is a candidate if it satisfies the DNF part (or the DNF part is
-/// empty) *and* every CNF clause. An empty query means "scan everything".
+/// * an exact literal is one DNF with a single AND-group (all its trigrams);
+/// * a case-insensitive literal contributes one DNF per needle window, each a
+///   disjunction of single-trigram groups (the window's fold variants);
+/// * a regex contributes a DNF for its required prefix literals and another
+///   for its required suffix literals.
+///
+/// A DNF that cannot filter (it is empty, or contains an empty group, which
+/// would make it trivially true) is ignored. An empty query means "scan
+/// everything".
 #[derive(Debug, Default, Clone)]
 pub struct TrigramQuery {
-    pub or_groups: Vec<Vec<Trigram>>,
-    pub and_clauses: Vec<Vec<Trigram>>,
+    pub dnfs: Vec<TrigramDnf>,
 }
 
 impl TrigramQuery {
     /// True when no usable trigram constraints exist and all documents are
-    /// candidates. A group/clause that is empty means that part can't filter.
+    /// candidates.
     pub fn is_unconstrained(&self) -> bool {
-        let dnf_off = self.or_groups.is_empty() || self.or_groups.iter().any(|g| g.is_empty());
-        let cnf_off = self.and_clauses.is_empty() || self.and_clauses.iter().any(|c| c.is_empty());
-        dnf_off && cnf_off
+        !self.dnfs.iter().any(dnf_filters)
     }
 
     pub fn from_literal(needle: &[u8]) -> TrigramQuery {
@@ -65,98 +82,115 @@ impl TrigramQuery {
             TrigramQuery::default()
         } else {
             TrigramQuery {
-                or_groups: vec![tris],
-                and_clauses: Vec::new(),
+                dnfs: vec![vec![tris]],
             }
         }
     }
 
     /// Build a case-insensitive literal query. Each 3-byte window of the needle
-    /// becomes a CNF clause listing every ASCII-case variant of that window, so
-    /// the trigram index can still prune candidates without false negatives.
+    /// becomes one DNF listing every byte sequence the window can begin with in
+    /// a match, so the trigram index can still prune candidates without false
+    /// negatives.
     ///
-    /// A window is only usable as a clause when all three of its bytes are
-    /// *ASCII-case-safe* (see [`ci_safe`]): otherwise the case-insensitive
-    /// matcher (Unicode-aware) could match bytes we did not enumerate, and
-    /// requiring the ASCII trigrams would drop real matches. Unsafe windows are
-    /// skipped, which only widens the candidate set. If no usable window remains,
-    /// the query is unconstrained and every document is scanned.
+    /// The matcher folds case Unicode-aware, so a window's variants are not
+    /// just its ASCII case permutations: `s`/`S` also matches U+017F (LATIN
+    /// SMALL LETTER LONG S) and `k`/`K` also matches U+212A (KELVIN SIGN),
+    /// whose UTF-8 encodings are multi-byte. For each window we enumerate every
+    /// combination of per-character fold forms and take the first three bytes
+    /// of each — exactly the set of trigrams a match of that window can start
+    /// with. Windows containing non-ASCII needle bytes are skipped (their fold
+    /// forms aren't enumerable this way), which only widens the candidate set.
     pub fn from_literal_ci(needle: &[u8]) -> TrigramQuery {
         if needle.len() < 3 {
             return TrigramQuery::default();
         }
-        let mut and_clauses: Vec<Vec<Trigram>> = Vec::new();
+        let mut dnfs: Vec<TrigramDnf> = Vec::new();
         for w in needle.windows(3) {
-            if w.iter().all(|&b| ci_safe(b)) {
-                and_clauses.push(case_variants([w[0], w[1], w[2]]));
+            if let Some(clause) = ci_window_trigrams([w[0], w[1], w[2]]) {
+                dnfs.push(clause.into_iter().map(|t| vec![t]).collect());
             }
         }
-        if and_clauses.is_empty() {
-            return TrigramQuery::default();
-        }
-        TrigramQuery {
-            or_groups: Vec::new(),
-            and_clauses,
-        }
-    }
-}
-
-/// True when a byte's set of case-insensitive matches (under the matcher's
-/// Unicode-aware case folding) is fully captured by enumerating its ASCII case
-/// variants, so a trigram window containing it can soundly prune candidates.
-///
-/// Two classes of bytes are *not* safe:
-///
-/// * Bytes `>= 0x80` belong to multibyte UTF-8 sequences; their folded forms
-///   differ in both bytes and length, so the ASCII variants of the raw bytes do
-///   not cover what the matcher accepts.
-/// * `s`/`S` and `k`/`K`: under Unicode simple case folding their fold class also
-///   contains a non-ASCII character (U+017F LATIN SMALL LETTER LONG S folds to
-///   `s`; U+212A KELVIN SIGN folds to `k`). A case-insensitive match could land
-///   on text containing those characters, whose UTF-8 bytes never form this
-///   ASCII trigram. (The `regex` crate, which backs the matcher, folds these by
-///   default; see the `regex_ci_folds_kelvin_and_long_s` test.)
-///
-/// All other ASCII bytes are safe: ASCII letters fold only to `{lower, upper}`
-/// and ASCII non-letters fold to themselves.
-fn ci_safe(b: u8) -> bool {
-    b < 0x80 && !matches!(b, b's' | b'S' | b'k' | b'K')
-}
-
-/// All ASCII-case permutations of a trigram (bytes that aren't ASCII letters are
-/// fixed). At most 2^3 = 8 variants.
-fn case_variants(w: Trigram) -> Vec<Trigram> {
-    let mut variants: Vec<Trigram> = vec![[0; 3]];
-    for (i, &b) in w.iter().enumerate() {
-        if b.is_ascii_alphabetic() {
-            let lo = b.to_ascii_lowercase();
-            let up = b.to_ascii_uppercase();
-            let mut next = Vec::with_capacity(variants.len() * 2);
-            for v in &variants {
-                let mut a = *v;
-                a[i] = lo;
-                let mut c = *v;
-                c[i] = up;
-                next.push(a);
-                next.push(c);
-            }
-            variants = next;
+        if dnfs.iter().any(dnf_filters) {
+            TrigramQuery { dnfs }
         } else {
-            for v in &mut variants {
-                v[i] = b;
+            TrigramQuery::default()
+        }
+    }
+}
+
+/// True when a DNF actually constrains matching: it has at least one group and
+/// no empty group (an empty group is trivially satisfied, disabling the DNF).
+pub fn dnf_filters(dnf: &TrigramDnf) -> bool {
+    !dnf.is_empty() && dnf.iter().all(|g| !g.is_empty())
+}
+
+/// A fold form: up to 3 UTF-8 bytes plus its length. Stack-only so query
+/// planning stays allocation-free per character.
+type FoldForm = ([u8; 3], usize);
+
+/// The byte sequences a single needle byte can match under the matcher's
+/// case-insensitive (Unicode simple fold) semantics, or `None` when they are
+/// not enumerable (non-ASCII bytes, whose folded forms shift window
+/// alignment unpredictably). Returns the number of forms written to `out`.
+fn fold_forms(b: u8, out: &mut [FoldForm; 3]) -> Option<usize> {
+    if b >= 0x80 {
+        return None;
+    }
+    if !b.is_ascii_alphabetic() {
+        out[0] = ([b, 0, 0], 1);
+        return Some(1);
+    }
+    out[0] = ([b.to_ascii_lowercase(), 0, 0], 1);
+    out[1] = ([b.to_ascii_uppercase(), 0, 0], 1);
+    match b.to_ascii_lowercase() {
+        // U+017F LATIN SMALL LETTER LONG S folds to 's'.
+        b's' => {
+            out[2] = ([0xC5, 0xBF, 0], 2);
+            Some(3)
+        }
+        // U+212A KELVIN SIGN folds to 'k'.
+        b'k' => {
+            out[2] = ([0xE2, 0x84, 0xAA], 3);
+            Some(3)
+        }
+        _ => Some(2),
+    }
+}
+
+/// All trigrams a case-insensitive match of window `w` can begin with: for
+/// every combination of per-character fold forms, the first three bytes of the
+/// concatenation (each form is >= 1 byte, so three forms always cover a
+/// trigram). At most 3^3 = 27 combinations; deduplicated and sorted.
+fn ci_window_trigrams(w: Trigram) -> Option<Vec<Trigram>> {
+    let mut forms = [[([0u8; 3], 0usize); 3]; 3];
+    let mut counts = [0usize; 3];
+    for i in 0..3 {
+        counts[i] = fold_forms(w[i], &mut forms[i])?;
+    }
+    let mut out: Vec<Trigram> = Vec::with_capacity(counts[0] * counts[1] * counts[2]);
+    let mut buf = [0u8; 9];
+    for a in &forms[0][..counts[0]] {
+        for b in &forms[1][..counts[1]] {
+            for c in &forms[2][..counts[2]] {
+                buf[..a.1].copy_from_slice(&a.0[..a.1]);
+                buf[a.1..a.1 + b.1].copy_from_slice(&b.0[..b.1]);
+                buf[a.1 + b.1..a.1 + b.1 + c.1].copy_from_slice(&c.0[..c.1]);
+                out.push([buf[0], buf[1], buf[2]]);
             }
         }
     }
-    variants.sort_unstable();
-    variants.dedup();
-    variants
+    out.sort_unstable();
+    out.dedup();
+    Some(out)
 }
 
 /// Build a trigram query from a regular expression by extracting required
-/// literal substrings. If the regex has no usable required literals we fall back
-/// to an unconstrained query (scan all candidates).
+/// literal substrings: the prefixes any match must start with *and* the
+/// suffixes any match must end with, each contributing an independent DNF.
+/// If neither side yields usable literals we fall back to an unconstrained
+/// query (scan all candidates).
 pub fn regex_trigrams(pattern: &str, case_insensitive: bool) -> TrigramQuery {
-    use regex_syntax::hir::literal::Extractor;
+    use regex_syntax::hir::literal::{ExtractKind, Extractor};
     use regex_syntax::ParserBuilder;
 
     let hir = match ParserBuilder::new()
@@ -168,28 +202,48 @@ pub fn regex_trigrams(pattern: &str, case_insensitive: bool) -> TrigramQuery {
         Err(_) => return TrigramQuery::default(),
     };
 
-    // Prefix literals that any match must start with. If the set is not exact or
-    // is infinite, the extractor yields inexact literals which still anchor the
-    // search usefully.
-    let seq = Extractor::new().extract(&hir);
-    let mut or_groups: Vec<Vec<Trigram>> = Vec::new();
-    if let Some(lits) = seq.literals() {
+    /// Turn an extracted literal sequence into a DNF (one AND-group per
+    /// literal). Returns `None` when any literal is too short to filter,
+    /// since requiring the remaining groups could drop real matches.
+    fn dnf_of(seq: &regex_syntax::hir::literal::Seq) -> Option<TrigramDnf> {
+        let lits = seq.literals()?;
+        let mut dnf: TrigramDnf = Vec::with_capacity(lits.len());
         for lit in lits {
             let tris = literal_trigrams(lit.as_bytes());
             if tris.is_empty() {
-                // A short or empty required literal disables filtering entirely.
-                return TrigramQuery::default();
+                return None;
             }
-            or_groups.push(tris);
+            dnf.push(tris);
+        }
+        if dnf.is_empty() {
+            None
+        } else {
+            Some(dnf)
         }
     }
-    if or_groups.is_empty() {
+
+    let prefix = dnf_of(&Extractor::new().extract(&hir));
+    let suffix = {
+        let mut ex = Extractor::new();
+        ex.kind(ExtractKind::Suffix);
+        dnf_of(&ex.extract(&hir))
+    };
+
+    let mut dnfs: Vec<TrigramDnf> = Vec::new();
+    if let Some(p) = prefix {
+        dnfs.push(p);
+    }
+    if let Some(s) = suffix {
+        // A fully literal pattern yields identical prefix and suffix sets;
+        // evaluating the same DNF twice would just double posting work.
+        if dnfs.first() != Some(&s) {
+            dnfs.push(s);
+        }
+    }
+    if dnfs.is_empty() {
         TrigramQuery::default()
     } else {
-        TrigramQuery {
-            or_groups,
-            and_clauses: Vec::new(),
-        }
+        TrigramQuery { dnfs }
     }
 }
 
@@ -203,6 +257,15 @@ mod tests {
         assert!(set.contains(b"abc"));
         assert!(set.contains(b"bcd"));
         assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn extract_is_sorted_and_deduped() {
+        let set = extract(b"abcabcabc");
+        let mut sorted = set.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(set, sorted, "extract must return sorted, distinct trigrams");
     }
 
     #[test]
@@ -223,20 +286,33 @@ mod tests {
     fn regex_extracts_required_literal() {
         let q = regex_trigrams("error_handler", false);
         assert!(!q.is_unconstrained());
+        // A literal pattern must not evaluate the same DNF twice.
+        assert_eq!(q.dnfs.len(), 1);
+    }
+
+    #[test]
+    fn regex_extracts_suffix_literals() {
+        // The prefix literal ("fn ") is too short to filter, but the required
+        // suffix "_handler" is selective; the query must be constrained by it.
+        let q = regex_trigrams(r"fn \w+_handler", false);
+        assert!(
+            !q.is_unconstrained(),
+            "suffix literal should constrain the query: {q:?}"
+        );
     }
 
     #[test]
     fn case_insensitive_literal_is_constrained() {
         let q = TrigramQuery::from_literal_ci(b"Foo");
         assert!(!q.is_unconstrained());
-        // One CNF clause per 3-byte window.
-        assert_eq!(q.and_clauses.len(), 1);
-        let clause = &q.and_clauses[0];
-        // "Foo" has 3 letters => 2^3 case variants.
-        assert!(clause.contains(b"foo"));
-        assert!(clause.contains(b"FOO"));
-        assert!(clause.contains(b"Foo"));
-        assert_eq!(clause.len(), 8);
+        // One DNF per 3-byte window; "Foo" has one window of 3 letters =>
+        // 2^3 single-trigram groups.
+        assert_eq!(q.dnfs.len(), 1);
+        let tris: Vec<Trigram> = q.dnfs[0].iter().map(|g| g[0]).collect();
+        assert!(tris.contains(b"foo"));
+        assert!(tris.contains(b"FOO"));
+        assert!(tris.contains(b"Foo"));
+        assert_eq!(tris.len(), 8);
         // Short needles cannot be filtered.
         assert!(TrigramQuery::from_literal_ci(b"fo").is_unconstrained());
     }
@@ -244,43 +320,45 @@ mod tests {
     #[test]
     fn ci_skips_windows_with_non_ascii_bytes() {
         // "café" => windows "caf", "af\xC3", "f\xC3\xA9". Only the all-ASCII
-        // "caf" window is sound; the others span the multibyte 'é' whose
+        // "caf" window is enumerable; the others span the multibyte 'é' whose
         // uppercase form ('É') has different bytes, so requiring them would drop
         // real matches.
         let q = TrigramQuery::from_literal_ci("café".as_bytes());
-        assert_eq!(q.and_clauses.len(), 1);
-        let clause = &q.and_clauses[0];
-        assert!(clause.contains(b"caf"));
-        assert!(clause.contains(b"CAF"));
-        // No clause may require a trigram containing a non-ASCII byte.
-        for clause in &q.and_clauses {
-            for tri in clause {
-                assert!(
-                    tri.iter().all(|&b| b < 0x80),
-                    "clause kept non-ASCII {tri:?}"
-                );
-            }
-        }
+        assert_eq!(q.dnfs.len(), 1);
+        let tris: Vec<Trigram> = q.dnfs[0].iter().map(|g| g[0]).collect();
+        assert!(tris.contains(b"caf"));
+        assert!(tris.contains(b"CAF"));
     }
 
     #[test]
-    fn ci_skips_kelvin_and_long_s_windows() {
-        // 's'/'k' fold to non-ASCII characters under Unicode, so any window
-        // containing them is dropped.
-        // "class" => "cla" (kept), "las"/"ass" (dropped: contain 's').
-        let q = TrigramQuery::from_literal_ci(b"class");
-        assert_eq!(q.and_clauses.len(), 1);
-        assert!(q.and_clauses[0].contains(b"cla"));
-
-        // Every window contains 's' or 'k' => unconstrained (full scan), but sound.
-        assert!(TrigramQuery::from_literal_ci(b"list").is_unconstrained());
-        assert!(TrigramQuery::from_literal_ci(b"make").is_unconstrained());
+    fn ci_kelvin_and_long_s_windows_stay_constrained() {
+        // Windows containing 's'/'k' used to be dropped entirely (the fold
+        // class includes a non-ASCII character), degrading common needles to
+        // full scans. They are now kept by enumerating the multi-byte fold
+        // forms, so every all-ASCII needle stays constrained.
+        for needle in [&b"class"[..], b"list", b"make", b"kayak"] {
+            let q = TrigramQuery::from_literal_ci(needle);
+            assert!(
+                !q.is_unconstrained(),
+                "{needle:?} should be constrained: {q:?}"
+            );
+        }
+        // The 's' window clause must include the long-s byte prefix so a
+        // haystack containing U+017F still passes the filter.
+        let q = TrigramQuery::from_literal_ci(b"las");
+        let tris: Vec<Trigram> = q.dnfs[0].iter().map(|g| g[0]).collect();
+        assert!(tris.contains(b"las"));
+        assert!(tris.contains(b"LAS"));
+        assert!(
+            tris.contains(&[b'l', b'a', 0xC5]),
+            "expected long-s prefix variant, got {tris:?}"
+        );
     }
 
-    /// Documents *why* `ci_safe` rejects 's'/'k': the matcher's Unicode-aware
-    /// case folding makes /k/i match U+212A and /s/i match U+017F, while a
-    /// non-special letter like /a/i does not match U+00E5 ('å'). If this ever
-    /// changes upstream, the `ci_safe` skip-set must be revisited.
+    /// Documents *why* the fold forms include 's'/'k' specials: the matcher's
+    /// Unicode-aware case folding makes /k/i match U+212A and /s/i match
+    /// U+017F, while a non-special letter like /a/i does not match U+00E5
+    /// ('å'). If this ever changes upstream, `fold_forms` must be revisited.
     #[test]
     fn regex_ci_folds_kelvin_and_long_s() {
         let ci = |pat: &str, hay: &str| {
@@ -299,18 +377,21 @@ mod tests {
     }
 
     /// End-to-end soundness: whenever the case-insensitive matcher accepts a
-    /// haystack, the trigram CNF filter must also keep it (no false negatives).
+    /// haystack, the trigram filter must also keep it (no false negatives).
     #[test]
     fn ci_filter_never_drops_a_match() {
         // (needle, haystack) pairs the Unicode-aware matcher accepts.
         let matching: &[(&str, &str)] = &[
-            ("café", "a CAFÉ here"),    // non-ASCII fold
-            ("café", "tiny café shop"), // exact bytes
-            ("class", "MyClass {}"),    // 's' windows dropped, 'cla' kept
-            ("foobar", "FOOBAR()"),     // plain ASCII
-            ("make", "MAKEFILE"),       // all windows dropped => unconstrained
-            ("kayak", "KAYAK"),         // 'k' windows dropped
-            ("string", "STRING s"),     // 's' windows dropped, others kept
+            ("café", "a CAFÉ here"),        // non-ASCII fold
+            ("café", "tiny café shop"),     // exact bytes
+            ("class", "MyClass {}"),        // plain 's'
+            ("class", "cla\u{017F}s X"),    // long s in the haystack
+            ("foobar", "FOOBAR()"),         // plain ASCII
+            ("make", "MAKEFILE"),           // plain 'k'
+            ("make", "ma\u{212A}e it"),     // KELVIN SIGN in the haystack
+            ("kayak", "KAYAK"),             // multiple 'k's
+            ("kayak", "kaya\u{212A} trip"), // trailing Kelvin
+            ("string", "STRING s"),
         ];
         for (needle, hay) in matching {
             let re = regex::bytes::RegexBuilder::new(&regex::escape(needle))
@@ -324,21 +405,32 @@ mod tests {
 
             let q = TrigramQuery::from_literal_ci(needle.as_bytes());
             assert!(
-                ci_filter_keeps(&q, hay.as_bytes()),
+                filter_keeps(&q, hay.as_bytes()),
                 "filter wrongly dropped {hay:?} for needle {needle:?}"
             );
         }
     }
 
-    /// Mirror of `Segment::candidates` CNF evaluation for an in-memory document:
-    /// the doc passes when every clause shares at least one trigram with it.
-    fn ci_filter_keeps(q: &TrigramQuery, haystack: &[u8]) -> bool {
-        if q.is_unconstrained() {
-            return true;
-        }
+    /// Soundness for the exact-case and regex planners too.
+    #[test]
+    fn literal_and_regex_filters_keep_their_matches() {
+        let hay = b"pub fn segment_writer_flush(x: u32) {}";
+        let lit = TrigramQuery::from_literal(b"segment_writer");
+        assert!(filter_keeps(&lit, hay));
+
+        let re = regex_trigrams(r"fn \w+_flush", false);
+        assert!(filter_keeps(&re, hay));
+    }
+
+    /// Mirror of `Segment::candidates` evaluation for an in-memory document:
+    /// the doc passes when, for every filtering DNF, at least one group's
+    /// trigrams are all present.
+    fn filter_keeps(q: &TrigramQuery, haystack: &[u8]) -> bool {
         let doc = extract(haystack);
-        q.and_clauses
+        let has = |t: &Trigram| doc.binary_search(t).is_ok();
+        q.dnfs
             .iter()
-            .all(|clause| clause.iter().any(|t| doc.contains(t)))
+            .filter(|d| dnf_filters(d))
+            .all(|dnf| dnf.iter().any(|group| group.iter().all(&has)))
     }
 }

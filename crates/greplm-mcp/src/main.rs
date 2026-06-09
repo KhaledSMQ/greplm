@@ -211,24 +211,21 @@ fn internal(e: impl std::fmt::Display) -> ErrorData {
 /// Run a read query against the warm daemon if one is listening, else fall back
 /// to an in-process (cold) query. Routing through the daemon turns a ~28ms
 /// cold index-open per call into a ~0.7ms warm socket round-trip, and the
-/// daemon's response is already the JSON we return — so we forward it verbatim.
+/// daemon's response is already the JSON text we return — it is forwarded
+/// verbatim with no parse/re-serialize round trip.
 ///
 /// The cold fallback self-heals a missing index (so a fresh checkout still
 /// works without `greplm index`) before running `fallback` in-process.
-fn served<F>(
-    root: &std::path::Path,
-    req: Request,
-    fallback: F,
-) -> Result<serde_json::Value, ErrorData>
+fn served<F>(root: &std::path::Path, req: Request, fallback: F) -> Result<String, ErrorData>
 where
-    F: FnOnce(&Greplm) -> greplm_core::Result<serde_json::Value>,
+    F: FnOnce(&Greplm) -> greplm_core::Result<String>,
 {
     let g = Greplm::discover(root).map_err(internal)?;
     // Global multi-root daemon first (one process serves every project).
     if let Some(mut c) = Client::try_connect(&global_socket_path()) {
         if let Ok(resp) = c.request_routed(g.root(), &req) {
             if resp.ok {
-                return Ok(resp.result.unwrap_or(serde_json::Value::Null));
+                return Ok(resp.result_text().to_string());
             }
         }
     }
@@ -236,7 +233,7 @@ where
     if let Some(mut c) = Client::try_connect(&g.socket_path()) {
         if let Ok(resp) = c.request(&req) {
             if resp.ok {
-                return Ok(resp.result.unwrap_or(serde_json::Value::Null));
+                return Ok(resp.result_text().to_string());
             }
         }
     }
@@ -265,6 +262,41 @@ fn record_savings<T: serde::Serialize>(
 fn ok_json<T: serde::Serialize>(value: &T) -> Result<CallToolResult, ErrorData> {
     let text = serde_json::to_string(value).map_err(internal)?;
     Ok(CallToolResult::success(vec![Content::text(text)]))
+}
+
+/// Return already-serialized JSON text verbatim (the daemon passthrough path).
+fn ok_text(text: String) -> Result<CallToolResult, ErrorData> {
+    Ok(CallToolResult::success(vec![Content::text(text)]))
+}
+
+/// Search hits grouped by file for the agent payload: the path and language
+/// are stated once per file instead of once per hit, which on multi-hit files
+/// cuts the JSON the model must read by a large constant factor.
+#[derive(serde::Serialize)]
+struct FileHits {
+    path: String,
+    lang: String,
+    /// `[line, column, text]` per hit, in rank order.
+    hits: Vec<(u32, u32, String)>,
+}
+
+/// Group ranked hits by file, preserving rank order (files appear in order of
+/// their best hit; hits within a file stay in rank order).
+fn group_hits(hits: Vec<greplm_core::search::SearchHit>) -> Vec<FileHits> {
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut out: Vec<FileHits> = Vec::new();
+    for h in hits {
+        let slot = *index.entry(h.path.clone()).or_insert_with(|| {
+            out.push(FileHits {
+                path: h.path,
+                lang: h.lang,
+                hits: Vec::new(),
+            });
+            out.len() - 1
+        });
+        out[slot].hits.push((h.line, h.column, h.text));
+    }
+    out
 }
 
 #[tool_router]
@@ -334,8 +366,9 @@ impl GreplmServer {
 
     #[tool(
         description = "Search file contents using the trigram index. Fast exact, substring, \
-                          and regex search across the codebase. Returns ranked matches with \
-                          path, line, column, and the matching line text."
+                          and regex search across the codebase. Returns ranked matches grouped \
+                          by file: [{path, lang, hits: [[line, column, text], ...]}, ...], files \
+                          ordered by their best hit."
     )]
     async fn search_code(
         &self,
@@ -355,16 +388,20 @@ impl GreplmServer {
             exhaustive: args.exhaustive,
         };
         let v = tokio::task::spawn_blocking(move || {
-            served(&root, Request::Search(query.clone()), |g| {
+            let text = served(&root, Request::Search(query.clone()), |g| {
                 // Falls back to an index-free walk if the index is unavailable.
                 let hits = g.search_or_grep(&query)?;
                 record_savings(g, "search", &hits, |h| h.path.clone());
-                Ok(serde_json::to_value(hits)?)
-            })
+                Ok(serde_json::to_string(&hits)?)
+            })?;
+            // Re-shape the flat hit list into the grouped per-file payload.
+            let hits: Vec<greplm_core::search::SearchHit> =
+                serde_json::from_str(&text).map_err(internal)?;
+            serde_json::to_string(&group_hits(hits)).map_err(internal)
         })
         .await
         .map_err(internal)??;
-        ok_json(&v)
+        ok_text(v)
     }
 
     #[tool(
@@ -387,12 +424,12 @@ impl GreplmServer {
             served(&root, Request::Symbols(query.clone()), |g| {
                 let hits = g.searcher()?.symbols(&query)?;
                 record_savings(g, "symbols", &hits, |h| h.path.clone());
-                Ok(serde_json::to_value(hits)?)
+                Ok(serde_json::to_string(&hits)?)
             })
         })
         .await
         .map_err(internal)??;
-        ok_json(&v)
+        ok_text(v)
     }
 
     #[tool(
@@ -407,17 +444,19 @@ impl GreplmServer {
         let file = args.file;
         let v = tokio::task::spawn_blocking(move || {
             served(&root, Request::Outline { file: file.clone() }, |g| {
-                Ok(serde_json::to_value(g.searcher()?.outline(&file)?)?)
+                Ok(serde_json::to_string(&g.searcher()?.outline(&file)?)?)
             })
         })
         .await
         .map_err(internal)??;
-        ok_json(&v)
+        ok_text(v)
     }
 
     #[tool(
         description = "Find references to an identifier: whole-word occurrences across the \
-                          codebase (definitions rank first). Good for 'who uses X'."
+                          codebase (definitions rank first). Good for 'who uses X'. Returns \
+                          matches grouped by file: [{path, lang, hits: [[line, column, text], \
+                          ...]}, ...]."
     )]
     async fn find_references(
         &self,
@@ -428,7 +467,7 @@ impl GreplmServer {
         let limit = args.limit.unwrap_or(100);
         let offset = args.offset.unwrap_or(0);
         let v = tokio::task::spawn_blocking(move || {
-            served(
+            let text = served(
                 &root,
                 Request::Refs {
                     name: name.clone(),
@@ -438,13 +477,16 @@ impl GreplmServer {
                 |g| {
                     let hits = g.searcher()?.references(&name, limit, offset)?;
                     record_savings(g, "refs", &hits, |h| h.path.clone());
-                    Ok(serde_json::to_value(hits)?)
+                    Ok(serde_json::to_string(&hits)?)
                 },
-            )
+            )?;
+            let hits: Vec<greplm_core::search::SearchHit> =
+                serde_json::from_str(&text).map_err(internal)?;
+            serde_json::to_string(&group_hits(hits)).map_err(internal)
         })
         .await
         .map_err(internal)??;
-        ok_json(&v)
+        ok_text(v)
     }
 
     #[tool(
@@ -472,13 +514,13 @@ impl GreplmServer {
                 |g| {
                     let hits = g.searcher()?.references_resolved(&name, limit, offset);
                     record_savings(g, "xref", &hits, |h| h.path.clone());
-                    Ok(serde_json::to_value(hits)?)
+                    Ok(serde_json::to_string(&hits)?)
                 },
             )
         })
         .await
         .map_err(internal)??;
-        ok_json(&v)
+        ok_text(v)
     }
 
     #[tool(
@@ -505,13 +547,13 @@ impl GreplmServer {
                 |g| {
                     let hits = g.searcher()?.callers(&name, limit, offset);
                     record_savings(g, "callers", &hits, |h| h.path.clone());
-                    Ok(serde_json::to_value(hits)?)
+                    Ok(serde_json::to_string(&hits)?)
                 },
             )
         })
         .await
         .map_err(internal)??;
-        ok_json(&v)
+        ok_text(v)
     }
 
     #[tool(
@@ -537,13 +579,13 @@ impl GreplmServer {
                 |g| {
                     let hits = g.searcher()?.callees(&name, limit, offset);
                     record_savings(g, "callees", &hits, |h| h.path.clone());
-                    Ok(serde_json::to_value(hits)?)
+                    Ok(serde_json::to_string(&hits)?)
                 },
             )
         })
         .await
         .map_err(internal)??;
-        ok_json(&v)
+        ok_text(v)
     }
 
     #[tool(
@@ -571,13 +613,13 @@ impl GreplmServer {
                 |g| {
                     let nodes = g.searcher()?.blast_radius(&name, depth, limit);
                     record_savings(g, "impact", &nodes, |n| n.path.clone());
-                    Ok(serde_json::to_value(nodes)?)
+                    Ok(serde_json::to_string(&nodes)?)
                 },
             )
         })
         .await
         .map_err(internal)??;
-        ok_json(&v)
+        ok_text(v)
     }
 
     #[tool(
@@ -597,12 +639,12 @@ impl GreplmServer {
                     file: file.clone(),
                     line,
                 },
-                |g| Ok(serde_json::to_value(g.searcher()?.blame(&file, line)?)?),
+                |g| Ok(serde_json::to_string(&g.searcher()?.blame(&file, line)?)?),
             )
         })
         .await
         .map_err(internal)??;
-        ok_json(&v)
+        ok_text(v)
     }
 
     #[tool(
@@ -624,15 +666,15 @@ impl GreplmServer {
                     limit,
                 },
                 |g| {
-                    Ok(serde_json::to_value(
-                        g.searcher()?.symbol_history(&name, limit)?,
+                    Ok(serde_json::to_string(
+                        &g.searcher()?.symbol_history(&name, limit)?,
                     )?)
                 },
             )
         })
         .await
         .map_err(internal)??;
-        ok_json(&v)
+        ok_text(v)
     }
 
     #[tool(
@@ -648,12 +690,12 @@ impl GreplmServer {
         let rev = args.rev;
         let v = tokio::task::spawn_blocking(move || {
             served(&root, Request::ChangedSince { rev: rev.clone() }, |g| {
-                Ok(serde_json::to_value(g.searcher()?.changed_since(&rev)?)?)
+                Ok(serde_json::to_string(&g.searcher()?.changed_since(&rev)?)?)
             })
         })
         .await
         .map_err(internal)??;
-        ok_json(&v)
+        ok_text(v)
     }
 
     #[tool(
@@ -681,16 +723,15 @@ impl GreplmServer {
                     let pack = g.searcher()?.context_pack(&task, budget);
                     let files: std::collections::BTreeSet<String> =
                         pack.items.iter().map(|i| i.path.clone()).collect();
-                    let returned =
-                        serde_json::to_string(&pack).map(|s| s.len()).unwrap_or(0) as u64;
-                    g.record_savings("pack", &files, returned, pack.items.len() as u64);
-                    Ok(serde_json::to_value(pack)?)
+                    let text = serde_json::to_string(&pack)?;
+                    g.record_savings("pack", &files, text.len() as u64, pack.items.len() as u64);
+                    Ok(text)
                 },
             )
         })
         .await
         .map_err(internal)??;
-        ok_json(&v)
+        ok_text(v)
     }
 
     #[tool(
@@ -722,13 +763,13 @@ impl GreplmServer {
                         .searcher()?
                         .structural_search(&pattern, &lang, limit, offset)?;
                     record_savings(g, "ast", &hits, |h| h.path.clone());
-                    Ok(serde_json::to_value(hits)?)
+                    Ok(serde_json::to_string(&hits)?)
                 },
             )
         })
         .await
         .map_err(internal)??;
-        ok_json(&v)
+        ok_text(v)
     }
 
     #[tool(
@@ -754,13 +795,13 @@ impl GreplmServer {
                 |g| {
                     let hits = g.searcher()?.definition(&file, line, col)?;
                     record_savings(g, "def", &hits, |h| h.path.clone());
-                    Ok(serde_json::to_value(hits)?)
+                    Ok(serde_json::to_string(&hits)?)
                 },
             )
         })
         .await
         .map_err(internal)??;
-        ok_json(&v)
+        ok_text(v)
     }
 
     #[tool(
@@ -785,13 +826,13 @@ impl GreplmServer {
                 |g| {
                     let hits = g.searcher()?.references_of(&file, line, col)?;
                     record_savings(g, "refs-at", &hits, |h| h.path.clone());
-                    Ok(serde_json::to_value(hits)?)
+                    Ok(serde_json::to_string(&hits)?)
                 },
             )
         })
         .await
         .map_err(internal)??;
-        ok_json(&v)
+        ok_text(v)
     }
 
     #[tool(
@@ -821,13 +862,13 @@ impl GreplmServer {
                     let returned: u64 = snip.text.len() as u64;
                     let files: BTreeSet<String> = [snip.path.clone()].into_iter().collect();
                     g.record_savings("snippet", &files, returned, 1);
-                    Ok(serde_json::to_value(snip)?)
+                    Ok(serde_json::to_string(&snip)?)
                 },
             )
         })
         .await
         .map_err(internal)??;
-        ok_json(&v)
+        ok_text(v)
     }
 
     #[tool(
@@ -841,12 +882,12 @@ impl GreplmServer {
         let root = self.root.clone();
         let v = tokio::task::spawn_blocking(move || {
             served(&root, Request::Summary, |g| {
-                Ok(serde_json::to_value(g.searcher()?.summary())?)
+                Ok(serde_json::to_string(&g.searcher()?.summary())?)
             })
         })
         .await
         .map_err(internal)??;
-        ok_json(&v)
+        ok_text(v)
     }
 
     #[tool(
@@ -858,21 +899,21 @@ impl GreplmServer {
         Parameters(_args): Parameters<StatusArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         let root = self.root.clone();
-        let v = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, ErrorData> {
+        let v = tokio::task::spawn_blocking(move || -> Result<String, ErrorData> {
             // Report the index as-is; never build/refresh just to read status.
             let g = Greplm::discover(&root).map_err(internal)?;
             if let Some(mut c) = Client::try_connect(&g.socket_path()) {
                 if let Ok(resp) = c.request(&Request::Status) {
                     if resp.ok {
-                        return Ok(resp.result.unwrap_or(serde_json::Value::Null));
+                        return Ok(resp.result_text().to_string());
                     }
                 }
             }
-            serde_json::to_value(g.status().map_err(internal)?).map_err(internal)
+            serde_json::to_string(&g.status().map_err(internal)?).map_err(internal)
         })
         .await
         .map_err(internal)??;
-        ok_json(&v)
+        ok_text(v)
     }
 }
 

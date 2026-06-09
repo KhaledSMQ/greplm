@@ -550,10 +550,11 @@ fn via_daemon<T: DeserializeOwned>(root: &RootArg, req: Request) -> Option<Resul
 
     /// Decode an OK response; on a daemon error response, return `None` so the
     /// caller falls back to the next transport rather than surfacing it.
+    /// The result is a raw JSON fragment, parsed straight into `T` with no
+    /// intermediate `serde_json::Value` tree.
     fn decode<T: DeserializeOwned>(resp: Response) -> Option<Result<T>> {
         if resp.ok {
-            let v = resp.result.unwrap_or(serde_json::Value::Null);
-            Some(serde_json::from_value(v).map_err(Into::into))
+            Some(serde_json::from_str(resp.result_text()).map_err(Into::into))
         } else {
             None
         }

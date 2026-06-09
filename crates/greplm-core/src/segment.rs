@@ -1,7 +1,10 @@
 //! On-disk index segments.
 //!
 //! Each segment is a set of files:
-//!   * `seg-N.fst`  - an FST mapping each trigram (3 bytes) to a byte offset
+//!   * `seg-N.fst`  - an FST mapping each trigram (3 bytes) to a packed value
+//!     holding the posting-list byte offset *and* its cardinality (see
+//!     [`pack_entry`]), so query planning can pick the rarest trigrams without
+//!     touching the postings blob
 //!   * `seg-N.post` - concatenated roaring bitmaps (posting lists) at those offsets
 //!   * `seg-N.docs` - postcard-encoded `Vec<`[`DocMeta`]`>` (one per document)
 //!   * `seg-N.syms` - postcard-encoded `Vec<`[`SymbolEntry`]`>`
@@ -10,9 +13,15 @@
 //!
 //! The FST and postings blob are mmap'd for zero-copy, page-cache-backed reads.
 //! Doc and symbol tables are small relative to content and loaded into memory.
+//!
+//! Everything except the live bitmap is immutable once written, so the loaded
+//! tables and derived lookup maps live in an [`Arc<SegmentData>`] that a
+//! reloading searcher can share instead of re-parsing (see [`Segment::reopen`]).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::io::BufWriter;
+use std::ops::Deref;
+use std::sync::Arc;
 
 use memmap2::Mmap;
 use roaring::RoaringBitmap;
@@ -21,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::fsutil::{write_atomic, AtomicFile};
 use crate::paths::Paths;
-use crate::trigram::{Trigram, TrigramQuery};
+use crate::trigram::{self, Trigram, TrigramDnf, TrigramQuery};
 
 /// Metadata for one indexed document.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +113,46 @@ pub struct RawRef {
     pub column: u32,
 }
 
+// ---------------------------------------------------------------------------
+// FST value packing
+// ---------------------------------------------------------------------------
+
+/// Bits of the packed FST value reserved for the posting-list byte offset.
+/// 40 bits addresses a 1 TiB postings blob, far beyond any real segment.
+const OFFSET_BITS: u32 = 40;
+const OFFSET_MASK: u64 = (1 << OFFSET_BITS) - 1;
+/// The cardinality saturates at 2^24-1; beyond that the exact count no longer
+/// affects rarest-first ordering meaningfully.
+const CARD_CAP: u64 = (1 << (64 - OFFSET_BITS)) - 1;
+
+/// Maximum trigrams intersected per AND-group, rarest first. Each additional
+/// intersection costs a full posting-list deserialize for rapidly diminishing
+/// selectivity, so long literals only pay for their most selective trigrams;
+/// the exact matcher verifies whatever the looser filter lets through.
+const MAX_GROUP_TRIGRAMS: usize = 4;
+
+/// Pack a posting-list offset and its cardinality into one FST value.
+fn pack_entry(offset: u64, cardinality: u64) -> Result<u64> {
+    if offset > OFFSET_MASK {
+        return Err(Error::other(format!(
+            "postings blob offset {offset} exceeds the packable maximum"
+        )));
+    }
+    Ok((cardinality.min(CARD_CAP) << OFFSET_BITS) | offset)
+}
+
+fn unpack_offset(value: u64) -> u64 {
+    value & OFFSET_MASK
+}
+
+fn unpack_card(value: u64) -> u64 {
+    value >> OFFSET_BITS
+}
+
+// ---------------------------------------------------------------------------
+// Writing
+// ---------------------------------------------------------------------------
+
 /// Accumulates documents and builds a segment on disk.
 #[derive(Default)]
 pub struct SegmentWriter {
@@ -130,11 +179,13 @@ impl SegmentWriter {
         self.syms.len()
     }
 
-    /// Add a document and return its assigned doc id.
+    /// Add a document and return its assigned doc id. `trigrams` must be the
+    /// document's distinct trigrams (any order; typically sorted from
+    /// [`trigram::extract`]).
     pub fn add_doc(
         &mut self,
         meta: DocMeta,
-        trigrams: &BTreeSet<Trigram>,
+        trigrams: &[Trigram],
         symbols: Vec<RawSymbol>,
         refs: Vec<RawRef>,
     ) -> u32 {
@@ -199,8 +250,8 @@ fn write_segment_files(
     let fst_path = paths.fst_file(seg_id);
     let mut fst_out = AtomicFile::create(&fst_path)?;
     let mut builder = fst::MapBuilder::new(BufWriter::new(fst_out.file()))?;
-    for (tri, offset) in fst_entries {
-        builder.insert(tri, *offset)?;
+    for (tri, value) in fst_entries {
+        builder.insert(tri, *value)?;
     }
     builder.finish()?;
     fst_out.commit()?;
@@ -221,12 +272,12 @@ fn write_segment_files(
     Ok(())
 }
 
-/// A serialized postings blob paired with the (trigram, offset) entries that
-/// index into it for the FST.
+/// A serialized postings blob paired with the (trigram, packed value) entries
+/// that index into it for the FST.
 type PostingsBlob = (Vec<u8>, Vec<(Trigram, u64)>);
 
-/// Build the postings blob and the (trigram, offset) FST entries from an
-/// in-memory posting map.
+/// Build the postings blob and the (trigram, packed offset+cardinality) FST
+/// entries from an in-memory posting map.
 fn build_postings_blob(postings: BTreeMap<Trigram, RoaringBitmap>) -> Result<PostingsBlob> {
     let mut post_blob: Vec<u8> = Vec::new();
     let mut fst_entries: Vec<(Trigram, u64)> = Vec::with_capacity(postings.len());
@@ -235,7 +286,7 @@ fn build_postings_blob(postings: BTreeMap<Trigram, RoaringBitmap>) -> Result<Pos
         let offset = post_blob.len() as u64;
         bm.serialize_into(&mut post_blob)
             .map_err(|e| Error::other(format!("roaring serialize: {e}")))?;
-        fst_entries.push((tri, offset));
+        fst_entries.push((tri, pack_entry(offset, bm.len())?));
     }
     Ok((post_blob, fst_entries))
 }
@@ -255,15 +306,20 @@ pub(crate) fn write_segment_from_parts(
     write_segment_files(paths, seg_id, docs, syms, refs, &fst_entries, &post_blob)
 }
 
-/// A read-only, mmap-backed view of a segment.
-pub struct Segment {
-    pub id: u64,
+// ---------------------------------------------------------------------------
+// Reading
+// ---------------------------------------------------------------------------
+
+/// The immutable, shareable portion of an opened segment: mmaps, decoded side
+/// tables, and the derived lookup structures. Wrapped in an `Arc` so a daemon
+/// reloading its searcher after an incremental index can reuse unchanged
+/// segments instead of re-parsing and re-deriving everything.
+pub struct SegmentData {
     fst: fst::Map<Mmap>,
     post: Mmap,
     pub docs: Vec<DocMeta>,
     pub syms: Vec<SymbolEntry>,
     pub refs: Vec<RefEntry>,
-    live: RoaringBitmap,
     /// Symbol indices grouped by `doc_id` (a flattened CSR layout). Together with
     /// `sym_start` this gives O(1) access to a document's symbols instead of a
     /// full scan of `syms`.
@@ -277,10 +333,29 @@ pub struct Segment {
     ref_start: Vec<u32>,
     /// Lowercased symbol names, parallel to `syms`, precomputed once at open.
     sym_name_lower: Vec<String>,
-    /// Call refs grouped by callee name -> indices into `refs`. Lets callers /
-    /// references / blast-radius look up by name in O(results) instead of
-    /// scanning every ref each query.
-    call_by_name: HashMap<Box<str>, Vec<u32>>,
+    /// Symbol indices grouped by lowercased name. Turns name lookups
+    /// (definitions, exact symbol queries) into O(results) instead of a scan
+    /// of every symbol per query.
+    sym_by_lower: HashMap<Box<str>, Vec<u32>>,
+    /// Reference indices (calls *and* imports) grouped by referent name. Lets
+    /// callers / references / blast-radius look up by name in O(results)
+    /// instead of scanning every ref each query.
+    ref_by_name: HashMap<Box<str>, Vec<u32>>,
+}
+
+/// A read-only, mmap-backed view of a segment: shared immutable data plus this
+/// open's snapshot of the live bitmap (the only part that changes on disk).
+pub struct Segment {
+    pub id: u64,
+    data: Arc<SegmentData>,
+    live: RoaringBitmap,
+}
+
+impl Deref for Segment {
+    type Target = SegmentData;
+    fn deref(&self) -> &SegmentData {
+        &self.data
+    }
 }
 
 impl Segment {
@@ -326,35 +401,99 @@ impl Segment {
 
         let (sym_order, sym_start) = build_doc_index(docs.len(), syms.iter().map(|s| s.doc_id));
         let (ref_order, ref_start) = build_doc_index(docs.len(), refs.iter().map(|r| r.doc_id));
-        let sym_name_lower = syms.iter().map(|s| s.name.to_ascii_lowercase()).collect();
+        let sym_name_lower: Vec<String> =
+            syms.iter().map(|s| s.name.to_ascii_lowercase()).collect();
 
-        let mut call_by_name: HashMap<Box<str>, Vec<u32>> = HashMap::new();
+        let mut sym_by_lower: HashMap<Box<str>, Vec<u32>> = HashMap::new();
+        for (i, lower) in sym_name_lower.iter().enumerate() {
+            sym_by_lower
+                .entry(lower.as_str().into())
+                .or_default()
+                .push(i as u32);
+        }
+
+        let mut ref_by_name: HashMap<Box<str>, Vec<u32>> = HashMap::new();
         for (i, r) in refs.iter().enumerate() {
-            if r.kind == RefKind::Call {
-                call_by_name
-                    .entry(r.name.as_str().into())
-                    .or_default()
-                    .push(i as u32);
-            }
+            ref_by_name
+                .entry(r.name.as_str().into())
+                .or_default()
+                .push(i as u32);
         }
 
         Ok(Segment {
             id: seg_id,
-            fst,
-            post,
-            docs,
-            syms,
-            refs,
+            data: Arc::new(SegmentData {
+                fst,
+                post,
+                docs,
+                syms,
+                refs,
+                sym_order,
+                sym_start,
+                ref_order,
+                ref_start,
+                sym_name_lower,
+                sym_by_lower,
+                ref_by_name,
+            }),
             live,
-            sym_order,
-            sym_start,
-            ref_order,
-            ref_start,
-            sym_name_lower,
-            call_by_name,
         })
     }
 
+    /// Re-open this segment cheaply: share the immutable data and reload only
+    /// the live bitmap (the single mutable file). Sound because segment ids are
+    /// never reused — the same id always names the same immutable content.
+    pub fn reopen(&self, paths: &Paths) -> Result<Segment> {
+        let live = read_bitmap(&paths.live_file(self.id))?;
+        Ok(Segment {
+            id: self.id,
+            data: self.data.clone(),
+            live,
+        })
+    }
+
+    pub fn is_live(&self, doc_id: u32) -> bool {
+        self.live.contains(doc_id)
+    }
+
+    pub fn live_count(&self) -> u64 {
+        self.live.len()
+    }
+
+    /// All live doc ids in this segment.
+    pub fn all_live(&self) -> RoaringBitmap {
+        self.live.clone()
+    }
+
+    /// Compute candidate doc ids satisfying the trigram query, intersected with
+    /// the live set. An unconstrained query yields all live docs.
+    pub fn candidates(&self, query: &TrigramQuery) -> Result<RoaringBitmap> {
+        let mut filtering = query
+            .dnfs
+            .iter()
+            .filter(|d| trigram::dnf_filters(d))
+            .peekable();
+        if filtering.peek().is_none() {
+            return Ok(self.all_live());
+        }
+        let mut result: Option<RoaringBitmap> = None;
+        for dnf in filtering {
+            let bm = self.data.dnf_bitmap(dnf)?;
+            result = Some(match result.take() {
+                None => bm,
+                Some(a) => a & bm,
+            });
+            if result.as_ref().is_some_and(|b| b.is_empty()) {
+                break;
+            }
+        }
+        let mut out = result.unwrap_or_default();
+        out &= &self.live;
+        Ok(out)
+    }
+}
+
+impl SegmentData {
     pub fn doc(&self, doc_id: u32) -> Option<&DocMeta> {
         self.docs.get(doc_id as usize)
     }
@@ -385,15 +524,29 @@ impl Segment {
             .map(move |&i| &self.refs[i as usize])
     }
 
-    /// Call sites whose callee is exactly `name`, via the prebuilt name index
-    /// (O(results), no full scan). Liveness is not filtered here; callers that
-    /// care should check [`Segment::is_live`].
-    pub fn calls_to(&self, name: &str) -> impl Iterator<Item = &RefEntry> {
-        self.call_by_name
+    /// References (calls and imports) whose name is exactly `name`, via the
+    /// prebuilt name index (O(results), no full scan). Liveness is not filtered
+    /// here; callers that care should check [`Segment::is_live`].
+    pub fn refs_named(&self, name: &str) -> impl Iterator<Item = &RefEntry> {
+        self.ref_by_name
             .get(name)
             .into_iter()
             .flatten()
             .map(move |&i| &self.refs[i as usize])
+    }
+
+    /// Call sites whose callee is exactly `name` (see [`Self::refs_named`]).
+    pub fn calls_to(&self, name: &str) -> impl Iterator<Item = &RefEntry> {
+        self.refs_named(name).filter(|r| r.kind == RefKind::Call)
+    }
+
+    /// Indices into `syms` whose lowercased name is exactly `lower`.
+    /// O(results) via the prebuilt name index.
+    pub fn syms_by_lower(&self, lower: &str) -> &[u32] {
+        self.sym_by_lower
+            .get(lower)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     /// Lowercased name of the symbol at index `i` in `syms`.
@@ -401,20 +554,9 @@ impl Segment {
         &self.sym_name_lower[i]
     }
 
-    pub fn is_live(&self, doc_id: u32) -> bool {
-        self.live.contains(doc_id)
-    }
-
-    pub fn live_count(&self) -> u64 {
-        self.live.len()
-    }
-
-    /// Read the posting list for a single trigram.
-    fn posting(&self, tri: Trigram) -> Result<Option<RoaringBitmap>> {
-        match self.fst.get(tri) {
-            Some(offset) => Ok(Some(self.posting_at(offset)?)),
-            None => Ok(None),
-        }
+    /// The packed FST entry for a trigram: posting offset + cardinality.
+    fn posting_entry(&self, tri: Trigram) -> Option<u64> {
+        self.fst.get(tri)
     }
 
     /// Deserialize the posting list stored at `offset` in the postings blob.
@@ -439,17 +581,17 @@ impl Segment {
     /// dropping any doc not present in the map (i.e. tombstoned/non-live).
     pub(crate) fn remap_postings(
         &self,
-        remap: &std::collections::HashMap<u32, u32>,
+        remap: &HashMap<u32, u32>,
         out: &mut BTreeMap<Trigram, RoaringBitmap>,
     ) -> Result<()> {
         use fst::Streamer;
         let mut stream = self.fst.stream();
-        while let Some((key, offset)) = stream.next() {
+        while let Some((key, value)) = stream.next() {
             if key.len() != 3 {
                 continue;
             }
             let tri: Trigram = [key[0], key[1], key[2]];
-            let bm = self.posting_at(offset)?;
+            let bm = self.posting_at(unpack_offset(value))?;
             let dest = out.entry(tri).or_default();
             for old in bm.iter() {
                 if let Some(&new_id) = remap.get(&old) {
@@ -460,82 +602,45 @@ impl Segment {
         Ok(())
     }
 
-    /// All live doc ids in this segment.
-    pub fn all_live(&self) -> RoaringBitmap {
-        self.live.clone()
-    }
-
-    /// AND together a group of trigrams (rarest-first so the smallest posting
-    /// list drives the intersection and we short-circuit on an empty result).
-    fn intersect_group(&self, group: &[Trigram]) -> Result<RoaringBitmap> {
-        let mut lists: Vec<RoaringBitmap> = Vec::with_capacity(group.len());
-        for tri in group {
-            lists.push(self.posting(*tri)?.unwrap_or_default());
-        }
-        lists.sort_by_key(|b| b.len());
-        let mut acc: Option<RoaringBitmap> = None;
-        for p in lists {
-            acc = Some(match acc.take() {
-                None => p,
-                Some(a) => a & p,
-            });
-            if acc.as_ref().map(|b| b.is_empty()).unwrap_or(false) {
-                break;
-            }
-        }
-        Ok(acc.unwrap_or_default())
-    }
-
-    /// OR together a clause of trigrams (the union of their posting lists).
-    fn union_clause(&self, clause: &[Trigram]) -> Result<RoaringBitmap> {
+    /// OR together the AND-groups of one DNF.
+    fn dnf_bitmap(&self, dnf: &TrigramDnf) -> Result<RoaringBitmap> {
         let mut acc = RoaringBitmap::new();
-        for tri in clause {
-            if let Some(bm) = self.posting(*tri)? {
-                acc |= bm;
-            }
+        for group in dnf {
+            acc |= self.group_bitmap(group)?;
         }
         Ok(acc)
     }
 
-    /// Compute candidate doc ids satisfying the trigram query, intersected with
-    /// the live set. An unconstrained query yields all live docs.
-    pub fn candidates(&self, query: &TrigramQuery) -> Result<RoaringBitmap> {
-        if query.is_unconstrained() {
-            return Ok(self.all_live());
-        }
-
-        // DNF part: OR of (AND of group). When absent (or any group is empty),
-        // it can't filter, so we start from the full live set.
-        let dnf_active =
-            !query.or_groups.is_empty() && query.or_groups.iter().all(|g| !g.is_empty());
-        let mut result = if dnf_active {
-            let mut acc: Option<RoaringBitmap> = None;
-            for group in &query.or_groups {
-                let g = self.intersect_group(group)?;
-                acc = Some(match acc.take() {
-                    None => g,
-                    Some(a) => a | g,
-                });
-            }
-            acc.unwrap_or_default()
-        } else {
-            self.all_live()
-        };
-
-        // CNF part: AND of (OR within clause).
-        let cnf_active =
-            !query.and_clauses.is_empty() && query.and_clauses.iter().all(|c| !c.is_empty());
-        if cnf_active {
-            for clause in &query.and_clauses {
-                result &= self.union_clause(clause)?;
-                if result.is_empty() {
-                    break;
-                }
+    /// AND together a group of trigrams, deserializing only the
+    /// [`MAX_GROUP_TRIGRAMS`] rarest posting lists. The cardinality packed in
+    /// the FST value orders the trigrams *before* any posting list is touched,
+    /// and a trigram absent from the index empties the group immediately.
+    /// Skipping the commoner trigrams only widens the candidate set, never
+    /// narrows it, so this is sound.
+    fn group_bitmap(&self, group: &[Trigram]) -> Result<RoaringBitmap> {
+        let mut entries: Vec<u64> = Vec::with_capacity(group.len());
+        for tri in group {
+            match self.posting_entry(*tri) {
+                Some(v) => entries.push(v),
+                // No document contains this trigram => the AND is empty.
+                None => return Ok(RoaringBitmap::new()),
             }
         }
+        entries.sort_unstable_by_key(|&v| unpack_card(v));
+        entries.truncate(MAX_GROUP_TRIGRAMS);
 
-        result &= &self.live;
-        Ok(result)
+        let mut acc: Option<RoaringBitmap> = None;
+        for v in entries {
+            let bm = self.posting_at(unpack_offset(v))?;
+            acc = Some(match acc.take() {
+                None => bm,
+                Some(a) => a & bm,
+            });
+            if acc.as_ref().is_some_and(|b| b.is_empty()) {
+                break;
+            }
+        }
+        Ok(acc.unwrap_or_default())
     }
 }
 

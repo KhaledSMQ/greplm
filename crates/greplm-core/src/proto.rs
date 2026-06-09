@@ -129,21 +129,33 @@ pub enum Request {
 }
 
 /// A response from the daemon to a client.
+///
+/// `result` is a pre-serialized JSON fragment ([`serde_json::value::RawValue`])
+/// rather than a `serde_json::Value` tree: the daemon serializes each result
+/// exactly once (typed struct -> JSON text) and the framing serializer embeds
+/// it verbatim, instead of building and then re-walking an intermediate
+/// `Value` tree for every response. Clients that want typed access parse the
+/// fragment directly into their target type; clients that just forward the
+/// payload (the MCP server) pass the text through untouched.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Response {
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<serde_json::Value>,
+    pub result: Option<Box<serde_json::value::RawValue>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
 impl Response {
-    pub fn ok(value: serde_json::Value) -> Self {
-        Response {
-            ok: true,
-            result: Some(value),
-            error: None,
+    /// Build a success response by serializing `value` once.
+    pub fn json<T: serde::Serialize>(value: &T) -> Self {
+        match serde_json::value::to_raw_value(value) {
+            Ok(raw) => Response {
+                ok: true,
+                result: Some(raw),
+                error: None,
+            },
+            Err(e) => Response::err(e.to_string()),
         }
     }
 
@@ -153,5 +165,10 @@ impl Response {
             result: None,
             error: Some(message.into()),
         }
+    }
+
+    /// The raw JSON text of the result (`"null"` when absent).
+    pub fn result_text(&self) -> &str {
+        self.result.as_deref().map(|r| r.get()).unwrap_or("null")
     }
 }

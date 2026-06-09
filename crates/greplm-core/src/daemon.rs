@@ -46,12 +46,17 @@ mod unix_impl {
     use std::sync::{Arc, RwLock};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+    use arc_swap::ArcSwap;
+
     use crate::error::{Error, Result};
     use crate::proto::{Request, Response, RoutedRequest};
     use crate::search::Searcher;
     use crate::{watch, Greplm};
 
-    type Shared = Arc<RwLock<Searcher>>;
+    /// The shared, hot-swappable searcher. `ArcSwap` makes reads wait-free
+    /// (queries never block on a swap, and a swap never waits for in-flight
+    /// queries) and cannot be poisoned by a panicking query thread.
+    type Shared = Arc<ArcSwap<Searcher>>;
 
     /// Maximum size of a single request line; protects against unbounded memory
     /// growth from a malformed or hostile client.
@@ -76,15 +81,15 @@ mod unix_impl {
         }
     }
 
-    /// Recover the inner value from a poisoned lock instead of propagating the
-    /// poison; a panicked query must not permanently disable the daemon.
-    fn read_searcher(s: &Shared) -> std::sync::RwLockReadGuard<'_, Searcher> {
-        s.read().unwrap_or_else(|e| e.into_inner())
-    }
-
-    fn swap_searcher(s: &Shared, new: Searcher) {
-        let mut guard = s.write().unwrap_or_else(|e| e.into_inner());
-        *guard = new;
+    /// Rebuild the searcher (reusing unchanged segments and the warm content
+    /// cache of the current one) and publish it. Reads concurrently in flight
+    /// keep their old snapshot; new reads see the fresh index.
+    fn refresh_searcher(s: &Shared, greplm: &Greplm) {
+        let prev = s.load_full();
+        match greplm.searcher_reusing(&prev) {
+            Ok(ns) => s.store(Arc::new(ns)),
+            Err(e) => tracing::warn!("searcher refresh failed: {e}"),
+        }
     }
 
     /// Run the daemon: build/refresh the index, start the watcher, and serve
@@ -92,7 +97,7 @@ mod unix_impl {
     pub fn serve(greplm: Arc<Greplm>, socket: &Path) -> Result<()> {
         greplm.ensure_initialized()?;
         greplm.index(false)?;
-        let searcher: Shared = Arc::new(RwLock::new(greplm.searcher()?));
+        let searcher: Shared = Arc::new(ArcSwap::from_pointee(greplm.searcher()?));
 
         // Background watcher: reindex incrementally and hot-swap the searcher.
         // If the watcher dies, log and restart it after a short backoff so the
@@ -106,9 +111,7 @@ mod unix_impl {
                     let g_cb = g_watch.clone();
                     let s_cb = s.clone();
                     let result = g_watch.watch(WATCH_DEBOUNCE, move |_stats| {
-                        if let Ok(ns) = g_cb.searcher() {
-                            swap_searcher(&s_cb, ns);
-                        }
+                        refresh_searcher(&s_cb, &g_cb);
                     });
                     match result {
                         Ok(()) => break,
@@ -217,19 +220,16 @@ mod unix_impl {
     }
 
     fn dispatch(req: Request, searcher: &Shared, greplm: &Arc<Greplm>) -> Response {
-        let json = |v| Response::ok(v);
         match req {
-            Request::Ping => Response::ok(serde_json::json!({"pong": true})),
+            Request::Ping => Response::json(&serde_json::json!({"pong": true})),
             Request::Status => match greplm.status() {
-                Ok(s) => to_resp(serde_json::to_value(s)),
+                Ok(s) => Response::json(&s),
                 Err(e) => Response::err(e.to_string()),
             },
             Request::Reindex { force } => match greplm.index(force) {
                 Ok(stats) => {
-                    if let Ok(ns) = greplm.searcher() {
-                        swap_searcher(searcher, ns);
-                    }
-                    json(serde_json::json!({
+                    refresh_searcher(searcher, greplm);
+                    Response::json(&serde_json::json!({
                         "files_indexed": stats.files_indexed,
                         "files_removed": stats.files_removed,
                         "symbols": stats.symbols,
@@ -245,94 +245,59 @@ mod unix_impl {
                 // defeated the warm daemon. The watcher hot-swaps the searcher
                 // on change, so reads stay ~sub-ms and reflect edits within the
                 // debounce window.
-                let guard = read_searcher(searcher);
+                let guard = searcher.load();
                 match other {
-                    Request::Summary => to_resp(serde_json::to_value(guard.summary())),
-                    Request::Search(q) => match guard.search(&q) {
-                        Ok(h) => to_resp(serde_json::to_value(h)),
-                        Err(e) => Response::err(e.to_string()),
-                    },
-                    Request::Symbols(q) => match guard.symbols(&q) {
-                        Ok(h) => to_resp(serde_json::to_value(h)),
-                        Err(e) => Response::err(e.to_string()),
-                    },
+                    Request::Summary => Response::json(&guard.summary()),
+                    Request::Search(q) => to_resp(guard.search(&q)),
+                    Request::Symbols(q) => to_resp(guard.symbols(&q)),
                     Request::Refs {
                         name,
                         limit,
                         offset,
-                    } => match guard.references(&name, limit, offset) {
-                        Ok(h) => to_resp(serde_json::to_value(h)),
-                        Err(e) => Response::err(e.to_string()),
-                    },
+                    } => to_resp(guard.references(&name, limit, offset)),
                     Request::RefsResolved {
                         name,
                         limit,
                         offset,
-                    } => to_resp(serde_json::to_value(
-                        guard.references_resolved(&name, limit, offset),
-                    )),
+                    } => Response::json(&guard.references_resolved(&name, limit, offset)),
                     Request::Callers {
                         name,
                         limit,
                         offset,
-                    } => to_resp(serde_json::to_value(guard.callers(&name, limit, offset))),
+                    } => Response::json(&guard.callers(&name, limit, offset)),
                     Request::Callees {
                         name,
                         limit,
                         offset,
-                    } => to_resp(serde_json::to_value(guard.callees(&name, limit, offset))),
-                    Request::BlastRadius { name, depth, limit } => to_resp(serde_json::to_value(
-                        guard.blast_radius(&name, depth, limit),
-                    )),
+                    } => Response::json(&guard.callees(&name, limit, offset)),
+                    Request::BlastRadius { name, depth, limit } => {
+                        Response::json(&guard.blast_radius(&name, depth, limit))
+                    }
                     Request::Definition { file, line, col } => {
-                        match guard.definition(&file, line, col) {
-                            Ok(h) => to_resp(serde_json::to_value(h)),
-                            Err(e) => Response::err(e.to_string()),
-                        }
+                        to_resp(guard.definition(&file, line, col))
                     }
                     Request::ReferencesAt { file, line, col } => {
-                        match guard.references_of(&file, line, col) {
-                            Ok(h) => to_resp(serde_json::to_value(h)),
-                            Err(e) => Response::err(e.to_string()),
-                        }
+                        to_resp(guard.references_of(&file, line, col))
                     }
                     Request::Structural {
                         pattern,
                         lang,
                         limit,
                         offset,
-                    } => match guard.structural_search(&pattern, &lang, limit, offset) {
-                        Ok(h) => to_resp(serde_json::to_value(h)),
-                        Err(e) => Response::err(e.to_string()),
-                    },
+                    } => to_resp(guard.structural_search(&pattern, &lang, limit, offset)),
                     Request::ContextPack { task, budget } => {
-                        to_resp(serde_json::to_value(guard.context_pack(&task, budget)))
+                        Response::json(&guard.context_pack(&task, budget))
                     }
-                    Request::Blame { file, line } => match guard.blame(&file, line) {
-                        Ok(b) => to_resp(serde_json::to_value(b)),
-                        Err(e) => Response::err(e.to_string()),
-                    },
-                    Request::History { name, limit } => match guard.symbol_history(&name, limit) {
-                        Ok(h) => to_resp(serde_json::to_value(h)),
-                        Err(e) => Response::err(e.to_string()),
-                    },
-                    Request::ChangedSince { rev } => match guard.changed_since(&rev) {
-                        Ok(c) => to_resp(serde_json::to_value(c)),
-                        Err(e) => Response::err(e.to_string()),
-                    },
-                    Request::Outline { file } => match guard.outline(&file) {
-                        Ok(h) => to_resp(serde_json::to_value(h)),
-                        Err(e) => Response::err(e.to_string()),
-                    },
+                    Request::Blame { file, line } => to_resp(guard.blame(&file, line)),
+                    Request::History { name, limit } => to_resp(guard.symbol_history(&name, limit)),
+                    Request::ChangedSince { rev } => to_resp(guard.changed_since(&rev)),
+                    Request::Outline { file } => to_resp(guard.outline(&file)),
                     Request::Snippet {
                         file,
                         start,
                         end,
                         context,
-                    } => match guard.read_snippet(&file, start, end, context) {
-                        Ok(h) => to_resp(serde_json::to_value(h)),
-                        Err(e) => Response::err(e.to_string()),
-                    },
+                    } => to_resp(guard.read_snippet(&file, start, end, context)),
                     // Handled above.
                     Request::Ping | Request::Status | Request::Reindex { .. } => {
                         Response::err("unreachable")
@@ -342,9 +307,10 @@ mod unix_impl {
         }
     }
 
-    fn to_resp(v: serde_json::Result<serde_json::Value>) -> Response {
+    /// Serialize a query result once, mapping query errors to error responses.
+    fn to_resp<T: serde::Serialize>(v: Result<T>) -> Response {
         match v {
-            Ok(value) => Response::ok(value),
+            Ok(value) => Response::json(&value),
             Err(e) => Response::err(e.to_string()),
         }
     }
@@ -409,7 +375,7 @@ mod unix_impl {
 
         let greplm = Arc::new(Greplm::open(root)?);
         greplm.ensure_indexed()?;
-        let searcher: Shared = Arc::new(RwLock::new(greplm.searcher()?));
+        let searcher: Shared = Arc::new(ArcSwap::from_pointee(greplm.searcher()?));
         let stop = Arc::new(AtomicBool::new(false));
 
         // Per-project watcher: hot-swap this entry's searcher on change, exit
@@ -424,9 +390,7 @@ mod unix_impl {
                 .name("greplm-watch".into())
                 .spawn(move || {
                     let r = watch::run_cancellable(&g_watch, WATCH_DEBOUNCE, stop, move |_stats| {
-                        if let Ok(ns) = g_cb.searcher() {
-                            swap_searcher(&s, ns);
-                        }
+                        refresh_searcher(&s, &g_cb);
                     });
                     if let Err(e) = r {
                         tracing::warn!("watcher for {} stopped: {e}", root_disp.display());

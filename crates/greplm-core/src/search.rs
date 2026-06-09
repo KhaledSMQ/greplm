@@ -1,6 +1,6 @@
 //! Query execution: trigram candidate filtering, then exact verification.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -372,24 +372,54 @@ impl ContentCache {
 pub struct Searcher {
     paths: Paths,
     segments: Vec<Segment>,
-    content: ContentCache,
+    /// Live document lookup by relative path -> (segment index, doc id).
+    /// Makes path-keyed queries (outline, imports, changed-since) O(1)
+    /// instead of a scan over every doc table.
+    by_path: HashMap<String, (usize, u32)>,
+    /// Shared so a reloaded searcher (daemon hot-swap) keeps its warm,
+    /// content-addressed file cache.
+    content: Arc<ContentCache>,
 }
 
 impl Searcher {
     /// Open the index described by `meta`.
     pub fn open(paths: &Paths) -> Result<Searcher> {
+        Self::open_inner(paths, None)
+    }
+
+    /// Open the index, reusing as much of `prev` as possible: segments whose
+    /// id is unchanged share their parsed tables and lookup maps (only the
+    /// live bitmap is re-read), and the verification content cache carries
+    /// over warm. Sound because segment ids are never reused, so an id always
+    /// names the same immutable content. This is what makes the daemon's
+    /// per-save searcher hot-swap cheap on large repositories.
+    pub fn open_reusing(paths: &Paths, prev: &Searcher) -> Result<Searcher> {
+        Self::open_inner(paths, Some(prev))
+    }
+
+    fn open_inner(paths: &Paths, prev: Option<&Searcher>) -> Result<Searcher> {
         if !paths.exists() {
             return Err(Error::IndexMissing(paths.base.clone()));
         }
         let meta = Meta::load(&paths.meta_file())?;
         let mut segments = Vec::with_capacity(meta.segments.len());
         for &seg_id in &meta.segments {
-            segments.push(Segment::open(paths, seg_id)?);
+            let reusable = prev.and_then(|p| p.segments.iter().find(|s| s.id == seg_id));
+            segments.push(match reusable {
+                Some(seg) => seg.reopen(paths)?,
+                None => Segment::open(paths, seg_id)?,
+            });
         }
+        let by_path = build_path_index(&segments);
+        let content = match prev {
+            Some(p) => p.content.clone(),
+            None => Arc::new(ContentCache::new(CONTENT_CACHE_BYTES)),
+        };
         Ok(Searcher {
             paths: paths.clone(),
             segments,
-            content: ContentCache::new(CONTENT_CACHE_BYTES),
+            by_path,
+            content,
         })
     }
 
@@ -413,7 +443,7 @@ impl Searcher {
         let lang_filter = query.lang.as_deref();
 
         // Gather candidate (segment, doc) pairs after cheap metadata filters.
-        let mut targets: Vec<(usize, u32)> = Vec::new();
+        let mut targets: Vec<(usize, u32, f32)> = Vec::new();
         for (si, seg) in self.segments.iter().enumerate() {
             let candidates = seg.candidates(&tq)?;
             for doc_id in candidates.iter() {
@@ -434,7 +464,7 @@ impl Searcher {
                         continue;
                     }
                 }
-                targets.push((si, doc_id));
+                targets.push((si, doc_id, 0.0));
             }
         }
 
@@ -442,30 +472,28 @@ impl Searcher {
         // backed) and scans the buffer with the real matcher.
         let root = &self.paths.root;
         let segments = &self.segments;
-        let content = &self.content;
+        let content: &ContentCache = &self.content;
         let max_per_file = query.max_per_file;
         let whole_word = query.whole_word;
         let exhaustive = query.exhaustive;
-        let mut hits: Vec<SearchHit> = targets
-            .par_iter()
-            .flat_map_iter(|&(si, doc_id)| {
-                verify_doc(
-                    &segments[si],
-                    doc_id,
-                    root,
-                    content,
-                    &matcher,
-                    max_per_file,
-                    whole_word,
-                    exhaustive,
-                )
-                .into_iter()
-            })
-            .collect();
+        let verify = |&(si, doc_id, _): &(usize, u32, f32)| {
+            verify_doc(
+                &segments[si],
+                doc_id,
+                root,
+                content,
+                &matcher,
+                max_per_file,
+                whole_word,
+                exhaustive,
+            )
+            .into_iter()
+        };
 
         if query.exhaustive {
             // Grep-equivalent: every match, deterministic (path, line, column)
             // order, no ranking and no offset/limit truncation.
+            let mut hits: Vec<SearchHit> = targets.par_iter().flat_map_iter(verify).collect();
             hits.sort_by(|a, b| {
                 a.path
                     .cmp(&b.path)
@@ -473,6 +501,51 @@ impl Searcher {
                     .then_with(|| a.column.cmp(&b.column))
             });
             return Ok(hits);
+        }
+
+        let need = query.offset.saturating_add(query.limit);
+        if need == 0 {
+            return Ok(Vec::new());
+        }
+
+        // Ranked mode: verify in descending max-possible-score order and stop
+        // once `need` collected hits *strictly* outrank everything still
+        // unverified — no unverified doc can then reach the returned page,
+        // including via tie-breaks. A hit's score is its base path score plus
+        // at most 4.0 (the 1.0 match constant + the 3.0 symbol-line bonus).
+        // When one batch covers every candidate, early termination can never
+        // fire, so skip the per-candidate scoring and sort entirely.
+        let chunk = need.saturating_mul(4).clamp(256, 4096);
+        let mut hits: Vec<SearchHit>;
+        if targets.len() <= chunk {
+            hits = targets.par_iter().flat_map_iter(verify).collect();
+        } else {
+            for t in &mut targets {
+                if let Some(doc) = self.segments[t.0].doc(t.1) {
+                    t.2 = path_score(&doc.path);
+                }
+            }
+            targets.sort_unstable_by(|a, b| {
+                b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            hits = Vec::new();
+            let mut start = 0usize;
+            while start < targets.len() {
+                let end = (start + chunk).min(targets.len());
+                let mut batch: Vec<SearchHit> = targets[start..end]
+                    .par_iter()
+                    .flat_map_iter(verify)
+                    .collect();
+                hits.append(&mut batch);
+                start = end;
+                if start < targets.len() {
+                    let remaining_max = targets[start].2 + 4.0;
+                    let outranking = hits.iter().filter(|h| h.score > remaining_max).count();
+                    if outranking >= need {
+                        break;
+                    }
+                }
+            }
         }
 
         let cmp = |a: &SearchHit, b: &SearchHit| {
@@ -485,41 +558,50 @@ impl Searcher {
         Ok(rank_paginate(hits, cmp, query.offset, query.limit))
     }
 
-    /// Look up symbols by name.
+    /// Look up symbols by name. Exact queries go through the per-segment name
+    /// index (O(results)); fuzzy queries scan, since prefix/substring/
+    /// subsequence matching has no exact key.
     pub fn symbols(&self, query: &SymbolQuery) -> Result<Vec<SymbolHit>> {
         let needle = query.name.to_ascii_lowercase();
         let mut hits: Vec<SymbolHit> = Vec::new();
+        let mut consider = |seg: &Segment, i: usize, sym: &crate::segment::SymbolEntry| {
+            if !seg.is_live(sym.doc_id) {
+                return;
+            }
+            if let Some(k) = &query.kind {
+                if &sym.kind != k {
+                    return;
+                }
+            }
+            let score = match match_symbol(&sym.name, seg.sym_name_lower(i), &needle, query.exact) {
+                Some(s) => s,
+                None => return,
+            };
+            let doc = match seg.doc(sym.doc_id) {
+                Some(d) => d,
+                None => return,
+            };
+            hits.push(SymbolHit {
+                path: doc.path.clone(),
+                lang: doc.lang.clone(),
+                name: sym.name.clone(),
+                kind: sym.kind.clone(),
+                line_start: sym.line_start,
+                line_end: sym.line_end,
+                container: sym.container.clone(),
+                signature: sym.signature.clone(),
+                score: score + path_score(&doc.path),
+            });
+        };
         for seg in &self.segments {
-            for (i, sym) in seg.syms.iter().enumerate() {
-                if !seg.is_live(sym.doc_id) {
-                    continue;
+            if query.exact {
+                for &i in seg.syms_by_lower(&needle) {
+                    consider(seg, i as usize, &seg.syms[i as usize]);
                 }
-                if let Some(k) = &query.kind {
-                    if &sym.kind != k {
-                        continue;
-                    }
+            } else {
+                for (i, sym) in seg.syms.iter().enumerate() {
+                    consider(seg, i, sym);
                 }
-                let score = match_symbol(&sym.name, seg.sym_name_lower(i), &needle, query.exact);
-                let score = match score {
-                    Some(s) => s,
-                    None => continue,
-                };
-                let doc = match seg.doc(sym.doc_id) {
-                    Some(d) => d,
-                    None => continue,
-                };
-                let score = score + path_score(&doc.path);
-                hits.push(SymbolHit {
-                    path: doc.path.clone(),
-                    lang: doc.lang.clone(),
-                    name: sym.name.clone(),
-                    kind: sym.kind.clone(),
-                    line_start: sym.line_start,
-                    line_end: sym.line_end,
-                    container: sym.container.clone(),
-                    signature: sym.signature.clone(),
-                    score,
-                });
             }
         }
         let cmp = |a: &SymbolHit, b: &SymbolHit| {
@@ -535,12 +617,9 @@ impl Searcher {
     /// Return the symbol outline for a single file (by relative path).
     pub fn outline(&self, rel_path: &str) -> Result<Vec<SymbolHit>> {
         let mut out = Vec::new();
-        for seg in &self.segments {
-            for (doc_id, doc) in seg.docs.iter().enumerate() {
-                let doc_id = doc_id as u32;
-                if doc.path != rel_path || !seg.is_live(doc_id) {
-                    continue;
-                }
+        if let Some(&(si, doc_id)) = self.by_path.get(rel_path) {
+            let seg = &self.segments[si];
+            if let Some(doc) = seg.doc(doc_id) {
                 for sym in seg.doc_syms(doc_id) {
                     out.push(SymbolHit {
                         path: doc.path.clone(),
@@ -573,12 +652,16 @@ impl Searcher {
 
     /// All live symbol definitions whose name matches `name` exactly
     /// (case-sensitive), as `(segment index, symbol index, symbol)` tuples.
+    /// O(results) via the per-segment name index — this is the inner loop of
+    /// `blast_radius` and `context_pack`, so it must not scan.
     fn defs_by_name(&self, name: &str) -> Vec<(usize, usize, &crate::segment::SymbolEntry)> {
+        let lower = name.to_ascii_lowercase();
         let mut out = Vec::new();
         for (si, seg) in self.segments.iter().enumerate() {
-            for (idx, sym) in seg.syms.iter().enumerate() {
+            for &idx in seg.syms_by_lower(&lower) {
+                let sym = &seg.syms[idx as usize];
                 if sym.name == name && seg.is_live(sym.doc_id) {
-                    out.push((si, idx, sym));
+                    out.push((si, idx as usize, sym));
                 }
             }
         }
@@ -623,9 +706,13 @@ impl Searcher {
     /// drawn from the structural reference index (not text matching). Ranked
     /// definitions first, then calls, then imports.
     pub fn references_resolved(&self, name: &str, limit: usize, offset: usize) -> Vec<RefHit> {
+        let lower = name.to_ascii_lowercase();
         let mut hits: Vec<RefHit> = Vec::new();
         for seg in &self.segments {
-            for sym in &seg.syms {
+            // Definitions and references are both looked up through the
+            // per-segment name indexes (O(results), no table scans).
+            for &i in seg.syms_by_lower(&lower) {
+                let sym = &seg.syms[i as usize];
                 if sym.name == name && seg.is_live(sym.doc_id) {
                     if let Some(doc) = seg.doc(sym.doc_id) {
                         hits.push(RefHit {
@@ -640,8 +727,8 @@ impl Searcher {
                     }
                 }
             }
-            for r in &seg.refs {
-                if r.name == name && seg.is_live(r.doc_id) {
+            for r in seg.refs_named(name) {
+                if seg.is_live(r.doc_id) {
                     if let Some(doc) = seg.doc(r.doc_id) {
                         let container = self
                             .enclosing_symbol(seg, r.doc_id, r.line)
@@ -769,7 +856,7 @@ impl Searcher {
         }
 
         let mut frontier: Vec<String> = vec![name.to_string()];
-        for dist in 1..=depth {
+        'expand: for dist in 1..=depth {
             let mut next: Vec<String> = Vec::new();
             for target in &frontier {
                 for site in self.callers(target, usize::MAX, 0) {
@@ -795,8 +882,10 @@ impl Searcher {
                     }
                     next.push(caller);
                 }
+                // Stop expanding entirely once the limit is reached; deeper
+                // levels could only produce nodes that get truncated anyway.
                 if out.len() >= limit {
-                    break;
+                    break 'expand;
                 }
             }
             if next.is_empty() {
@@ -944,16 +1033,10 @@ impl Searcher {
     /// The set of names imported into `rel_path` (from the reference index).
     fn imported_names(&self, rel_path: &str) -> HashSet<String> {
         let mut out = HashSet::new();
-        for seg in &self.segments {
-            for (doc_id, doc) in seg.docs.iter().enumerate() {
-                let doc_id = doc_id as u32;
-                if doc.path != rel_path || !seg.is_live(doc_id) {
-                    continue;
-                }
-                for r in seg.doc_refs(doc_id) {
-                    if r.kind == RefKind::Import {
-                        out.insert(r.name.clone());
-                    }
+        if let Some(&(si, doc_id)) = self.by_path.get(rel_path) {
+            for r in self.segments[si].doc_refs(doc_id) {
+                if r.kind == RefKind::Import {
+                    out.insert(r.name.clone());
                 }
             }
         }
@@ -1263,13 +1346,9 @@ impl Searcher {
         let mut out = Vec::with_capacity(changed.len());
         for cf in changed {
             let mut symbols = Vec::new();
-            for seg in &self.segments {
-                for (doc_id, doc) in seg.docs.iter().enumerate() {
-                    if doc.path == cf.path && seg.is_live(doc_id as u32) {
-                        for s in seg.doc_syms(doc_id as u32) {
-                            symbols.push(s.name.clone());
-                        }
-                    }
+            if let Some(&(si, doc_id)) = self.by_path.get(&cf.path) {
+                for s in self.segments[si].doc_syms(doc_id) {
+                    symbols.push(s.name.clone());
                 }
             }
             symbols.sort();
@@ -1541,6 +1620,22 @@ fn verify_doc(
         out.truncate(max_per_file);
     }
     out
+}
+
+/// Build the path -> (segment index, doc id) lookup over live documents.
+/// A path is live in exactly one segment (changed files tombstone the old
+/// copy), so the map is unambiguous.
+fn build_path_index(segments: &[Segment]) -> HashMap<String, (usize, u32)> {
+    let mut map = HashMap::new();
+    for (si, seg) in segments.iter().enumerate() {
+        for (doc_id, doc) in seg.docs.iter().enumerate() {
+            let doc_id = doc_id as u32;
+            if seg.is_live(doc_id) {
+                map.insert(doc.path.clone(), (si, doc_id));
+            }
+        }
+    }
+    map
 }
 
 /// Byte offsets at which each line begins (index 0 is the start of the file).

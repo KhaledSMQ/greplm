@@ -18,6 +18,7 @@ semantic = ["dep:tokenizers"]
 
 [dependencies]
 anyhow = "1.0.102"
+arc-swap = "1.7.1"
 blake3 = "1.8.5"
 fst = "0.4.7"
 ignore = "0.4.26"
@@ -33,7 +34,7 @@ regex = "1.12.3"
 regex-syntax = "0.8.10"
 roaring = "0.11.3"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
+serde_json = { version = "1.0.150", features = ["raw_value"] }
 simdutf8 = "0.1.5"
 thiserror = "2.0.18"
 tokenizers = { version = "0.20", default-features = false, features = ["onig"], optional = true }

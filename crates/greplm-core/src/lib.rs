@@ -211,6 +211,14 @@ impl Greplm {
         Searcher::open(&self.paths)
     }
 
+    /// Open a searcher over the current index, sharing unchanged segments and
+    /// the warm content cache with `prev` (see [`Searcher::open_reusing`]).
+    /// The daemon uses this so a hot-swap after an incremental index re-reads
+    /// only what actually changed instead of re-parsing every segment.
+    pub fn searcher_reusing(&self, prev: &Searcher) -> Result<Searcher> {
+        Searcher::open_reusing(&self.paths, prev)
+    }
+
     /// Content search that always returns results: it queries the index, and if
     /// the index is missing or errors, transparently falls back to an
     /// index-free walk+scan (grep parity). The fallback is logged at WARN.

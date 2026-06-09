@@ -189,8 +189,8 @@ esac
 echo
 echo "  ╭────────────────────────────────────────────────────────────╮"
 echo "  │                                                            │"
-echo "  │    ${BOLD}${CYAN}greplm${RESET} — installed successfully                 │"
-echo "  │    ${DIM}Code search for the agent loop${RESET}                        │"
+echo "  │    ${BOLD}${CYAN}greplm${RESET} — installed successfully                         │"
+echo "  │    ${DIM}Code search for the agent loop${RESET}                          │"
 echo "  │                                                            │"
 echo "  ╰────────────────────────────────────────────────────────────╯"
 printf "  %sInstall dir:%s  %s\n\n" "$DIM" "$RESET" "$install_dir"
