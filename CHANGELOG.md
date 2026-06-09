@@ -11,6 +11,35 @@ creates the GitHub release, and publishes the crates to crates.io (see
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-09
+
+### Added
+
+- **`greplm welcome`**: first-run checklist (MCP config, agent files, search) you can
+  re-run anytime.
+- **`greplm mcp config`**: emits ready-to-paste MCP client JSON on stdout with editor
+  paste hints on stderr (`--pretty`, `-q` for scripts).
+- **Smarter `greplm agent add`**: auto-detects your editor from project markers
+  (`.cursor/`, `CLAUDE.md`, etc.), installs a tool-specific subagent *and* main-loop
+  guidance (`AGENTS.md` / `CLAUDE.md` / …), and falls back to a universal `AGENTS.md`
+  when nothing is detected.
+- **Onboarding banners** after `greplm setup`: a styled summary of what was built plus
+  a three-step next-actions guide (MCP, agent files, search).
+- **Bundled `greplm-search` subagent** definition for Cursor and other tools that read
+  `.cursor/agents/`.
+
+### Changed
+
+- Getting-started, commands, and MCP documentation rewritten around the new setup flow
+  (`greplm setup` → `greplm mcp config` → `greplm agent add`).
+- Install scripts (`install.sh`, `install.ps1`) now print clearer post-install next
+  steps instead of stopping at "done".
+
+### Fixed
+
+- `install.sh` installs binaries via a temp file and atomic rename so macOS code
+  signatures are not invalidated mid-write.
+
 ## [0.2.0] - 2026-06-09
 
 ### Added
@@ -83,7 +112,8 @@ creates the GitHub release, and publishes the crates to crates.io (see
   structural (AST) search, git time-travel, token-budgeted context packs, a warm
   query daemon, a CLI, and an MCP server — across 14 languages, fully offline.
 
-[Unreleased]: https://github.com/KhaledSMQ/greplm/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/KhaledSMQ/greplm/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/KhaledSMQ/greplm/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/KhaledSMQ/greplm/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/KhaledSMQ/greplm/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/KhaledSMQ/greplm/compare/v0.1.1...v0.1.2
