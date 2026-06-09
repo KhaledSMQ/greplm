@@ -16,12 +16,12 @@ set -eu
 
 # Terminal colors (off when piped or NO_COLOR is set).
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
-    BOLD='\033[1m'
-    DIM='\033[2m'
-    CYAN='\033[36m'
-    GREEN='\033[32m'
-    YELLOW='\033[33m'
-    RESET='\033[0m'
+    BOLD=$(printf '\033[1m')
+    DIM=$(printf '\033[2m')
+    CYAN=$(printf '\033[36m')
+    GREEN=$(printf '\033[32m')
+    YELLOW=$(printf '\033[33m')
+    RESET=$(printf '\033[0m')
 else
     BOLD='' DIM='' CYAN='' GREEN='' YELLOW='' RESET=''
 fi
