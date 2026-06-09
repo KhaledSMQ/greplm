@@ -26,21 +26,42 @@
 
 ## Client configuration
 
-Cursor / Claude Desktop style `mcp.json`:
+Generate copy-paste JSON with resolved absolute paths:
+
+```bash
+cd your-project
+greplm mcp config          # JSON on stdout, paste hints on stderr
+greplm mcp config --pretty # indented JSON (same content)
+greplm mcp config -q       # JSON only (for scripts)
+```
+
+Example output:
 
 ```json
 {
   "mcpServers": {
     "greplm": {
-      "command": "/absolute/path/to/greplm-mcp",
-      "args": ["/absolute/path/to/your/project"]
+      "command": "/Users/you/.cargo/bin/greplm-mcp",
+      "args": ["/Users/you/projects/my-app"]
     }
   }
 }
 ```
 
-The first argument sets the project root (defaults to the working directory). All diagnostics go to
-stderr; stdout carries only the protocol stream.
+**Where to paste it**
+
+| Client | Config file |
+|--------|-------------|
+| Cursor (project) | `.cursor/mcp.json` |
+| Cursor (global) | Cursor Settings → MCP |
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) |
+| VS Code | `.vscode/mcp.json` |
+
+The first `args` entry sets the project root. All diagnostics go to stderr; stdout carries only
+the protocol stream.
+
+Also run `greplm agent add` so your editor knows *when* to reach for greplm (see
+[Getting started — Add the agent file](getting-started.md#add-the-agent-file)).
 
 ## Output format
 

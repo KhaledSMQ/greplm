@@ -70,9 +70,11 @@ Requires a git repo.
 | `greplm doctor`   | `[--fix]`                            | Diagnose common problems (stale index, missing daemon, outdated binary); `--fix` repairs safe issues |
 | `greplm update`   | `[--check]`                          | Self-update via the official install script; `--check` reports without installing |
 
-## Agent setup
+## Agent & MCP setup
 
-| Command             | Arguments & key options              | What it does                                          |
-|---------------------|--------------------------------------|-------------------------------------------------------|
-| `greplm agent add`  | `[tool] [--global] [--force]`        | Install the bundled agent file (auto-detects the tool when omitted) |
-| `greplm agent list` | `[--global]`                         | List supported tools and their destination paths      |
+| Command               | Arguments & key options              | What it does                                          |
+|-----------------------|--------------------------------------|-------------------------------------------------------|
+| `greplm welcome`      | —                                    | Show first-run checklist (MCP config, agent files, search) |
+| `greplm mcp config`   | `[--pretty] [-q/--quiet]`            | Print copy-paste MCP client JSON (stdout) with paste hints (stderr) |
+| `greplm agent add`    | `[tool] [--global] [--force]`        | Install the bundled agent file (auto-detects the tool when omitted) |
+| `greplm agent list`   | `[--global]`                         | List supported tools and their destination paths      |

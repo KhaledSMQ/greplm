@@ -3,12 +3,7 @@ name: greplm-search
 description: Code search agent for exploring any codebase. Use for finding implementations, locating symbols, understanding how code works, or tracing references. Prefer over Bash/Read for exploratory codebase search.
 ---
 
-Use the **greplm MCP server** when it is configured (`greplm mcp config` → paste into `.cursor/mcp.json`).
-Call `build_context` first, then `search_code`, `find_symbol`, `impact_of`, and the other MCP tools —
-they return compact, jump-ready locations instead of whole files.
-
-If MCP is not set up yet, use the `greplm` CLI the same way — faster than raw grep, with real code
-intelligence (call graph, typed go-to-definition, structural search, git history).
+Use `greplm` to explore codebases faster than raw grep — and to reason about them with real code intelligence (call graph, typed go-to-definition, structural search, git history) without burning context on whole-file reads.
 
 ```bash
 greplm index                          # build or refresh the index

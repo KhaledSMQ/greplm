@@ -162,29 +162,20 @@ See [Code intelligence](docs/code-intelligence.md) for the full tour.
 
 ## Use it from your agent
 
-greplm ships as an **MCP server** (`greplm-mcp`) so agents like Cursor and Claude Desktop can
-call it directly. Drop this into your `mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "greplm": {
-      "command": "/absolute/path/to/greplm-mcp",
-      "args": ["/absolute/path/to/your/project"]
-    }
-  }
-}
-```
-
-Then teach your tool to reach for greplm instead of raw grep with a bundled agent file:
+Three commands wire greplm into Cursor, Claude Code, Copilot, and the rest:
 
 ```bash
-greplm agent add cursor          # install into .cursor/
-greplm agent add claude --global # install into ~/.claude/
-greplm agent list                # see supported tools
+cd your-project
+greplm setup                     # index + warm daemon (+ auto agent files when detected)
+greplm mcp config                # copy-paste MCP JSON (resolved paths, ready to go)
+greplm agent add                 # teach your editor to prefer greplm over grep
 ```
 
-See the [MCP guide](docs/mcp.md) for the full list of exposed tools.
+`greplm mcp config` prints ready-to-paste JSON to stdout (with hints on where to put it).
+`greplm agent add` auto-detects `.cursor/`, `.claude/`, `.github/`, and other tool
+directories. Run `greplm welcome` anytime to see the checklist again.
+
+See the [MCP guide](docs/mcp.md) for client paths and the full list of exposed tools.
 
 ## How it compares
 

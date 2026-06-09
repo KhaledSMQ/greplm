@@ -195,3 +195,26 @@ fn search_no_matches_emits_empty_json_array() {
     let hits: Vec<serde_json::Value> = serde_json::from_str(out.trim()).unwrap();
     assert!(hits.is_empty(), "expected no hits, got {out}");
 }
+
+#[test]
+fn mcp_config_emits_valid_json_with_project_root() {
+    let root = unique_tmp("mcp");
+    let root_str = root.to_str().unwrap();
+
+    let out = bin()
+        .args(["mcp", "config", "-C", root_str, "-q"])
+        .output()
+        .expect("spawn greplm mcp config");
+    assert!(out.status.success(), "mcp config should exit 0");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid MCP JSON");
+    let server = &v["mcpServers"]["greplm"];
+    assert!(server["command"].as_str().unwrap().contains("greplm-mcp"));
+    let args = server["args"].as_array().expect("args array");
+    assert_eq!(args.len(), 1);
+    assert!(
+        args[0].as_str().unwrap().contains("mcp"),
+        "project root should be in args: {:?}",
+        args
+    );
+}

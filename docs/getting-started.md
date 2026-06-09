@@ -25,18 +25,29 @@ are also published on [GitHub Releases](https://github.com/KhaledSMQ/greplm/rele
 
 ## Quick start
 
+**First time in a project** — one command sets up the index, warm daemon, and agent files:
+
 ```bash
-# Build the index for the current project
-greplm index
+cd your-project
+greplm setup
+```
 
-# Search file contents
-greplm search "SegmentWriter"
+Then connect your AI editor:
 
-# Look up a definition
-greplm symbols Searcher
+```bash
+greplm mcp config    # copy the JSON into Cursor / Claude / VS Code MCP settings
+greplm agent add     # auto-detects your editor (.cursor/, .claude/, etc.)
+```
 
-# Find references to an identifier
-greplm refs SegmentWriter
+Run `greplm welcome` anytime to see the checklist again.
+
+**Manual workflow** (same result, step by step):
+
+```bash
+greplm index                    # build the index
+greplm search "SegmentWriter"   # search file contents
+greplm symbols Searcher         # look up a definition
+greplm refs SegmentWriter       # find references
 ```
 
 Each query prints compact, ready-to-jump locations:

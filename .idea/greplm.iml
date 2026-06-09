@@ -7,6 +7,9 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/greplm-core/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/greplm-core/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/crates/greplm-mcp/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/greplm-cli/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/greplm-core/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/greplm-mcp/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

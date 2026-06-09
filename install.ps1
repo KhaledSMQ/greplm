@@ -100,4 +100,31 @@ if ($PathParts -notcontains $InstallDir) {
     Write-Host ""
 }
 
-Write-Host "Done. Run: greplm --help"
+Write-Host ""
+Write-Host "  ╭────────────────────────────────────────────────────────────╮"
+Write-Host "  │                                                            │"
+Write-Host "  │    greplm — installed successfully                           │"
+Write-Host "  │    Code search for the agent loop                            │"
+Write-Host "  │                                                            │"
+Write-Host "  ╰────────────────────────────────────────────────────────────╯"
+Write-Host "  Install dir:  $InstallDir" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "  Get started in 3 steps" -ForegroundColor White
+Write-Host ""
+Write-Host "  ①  Set up a project" -ForegroundColor Yellow
+Write-Host "     cd <your-project> && greplm setup" -ForegroundColor Green
+Write-Host "     index + warm daemon" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "  ②  Connect your AI editor" -ForegroundColor Yellow
+Write-Host "     greplm mcp config" -ForegroundColor Green
+Write-Host "     paste JSON → .cursor/mcp.json · Claude · VS Code" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "  ③  Teach your editor" -ForegroundColor Yellow
+Write-Host "     greplm agent add" -ForegroundColor Green
+Write-Host "     auto-detects Cursor, Claude, Copilot, …" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "  ──────────────────────────────────────────────────────────────" -ForegroundColor DarkGray
+Write-Host "  Show steps again:  greplm welcome" -ForegroundColor DarkGray
+Write-Host "  Binaries:          $InstallDir\greplm.exe"
+Write-Host "                     $InstallDir\greplm-mcp.exe"
+Write-Host ""

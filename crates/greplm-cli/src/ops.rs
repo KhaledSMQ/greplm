@@ -13,6 +13,9 @@ use greplm_core::client::Client;
 use greplm_core::proto::{global_socket_path, Request};
 use greplm_core::Greplm;
 
+use crate::agent;
+use crate::onboard;
+
 const REPO: &str = "KhaledSMQ/greplm";
 const INSTALL_URL: &str = "https://raw.githubusercontent.com/KhaledSMQ/greplm/main/install.sh";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -180,17 +183,22 @@ pub fn setup(root: &Path, install_service: bool) -> Result<()> {
     let g = Greplm::open(root)?;
     g.ensure_initialized()?;
     let built = g.ensure_indexed()?;
-    println!(
-        "{} index for {}",
-        if built { "built" } else { "verified" },
-        g.root().display()
-    );
     if install_service {
         install_global_service()?;
     } else {
         note("skipped daemon service (--no-daemon-service); run `greplm serve --global` to start one");
     }
-    println!("done \u{2014} queries and the MCP server will auto-route to the warm daemon.");
+    onboard::print_setup_summary(built, g.root());
+
+    // Auto-install agent definitions when we can detect the user's editor.
+    match agent::add(None, root, false, false) {
+        Ok(()) => {}
+        Err(e) => note(&format!(
+            "agent files not installed ({e}); run `greplm agent add cursor` (or your tool)"
+        )),
+    }
+
+    onboard::print_next_steps(root);
     Ok(())
 }
 

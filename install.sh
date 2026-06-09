@@ -14,6 +14,18 @@ set -eu
 # Propagate failures through pipes (curl | tar).
 (set -o pipefail 2>/dev/null) && set -o pipefail
 
+# Terminal colors (off when piped or NO_COLOR is set).
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+    BOLD='\033[1m'
+    DIM='\033[2m'
+    CYAN='\033[36m'
+    GREEN='\033[32m'
+    YELLOW='\033[33m'
+    RESET='\033[0m'
+else
+    BOLD='' DIM='' CYAN='' GREEN='' YELLOW='' RESET=''
+fi
+
 do_curl() {
     curl --retry 5 -L --proto '=https' --tlsv1.2 -sSf "$@"
 }
@@ -174,9 +186,26 @@ case ":${PATH}:" in
         ;;
 esac
 
-echo "Done."
 echo
-echo "Next steps:"
-echo "  cd <your project> && greplm setup   # build the index + start an always-on daemon"
-echo "  greplm doctor                       # check everything is healthy"
-echo "  greplm --help"
+echo "  ╭────────────────────────────────────────────────────────────╮"
+echo "  │                                                            │"
+echo "  │    ${BOLD}${CYAN}greplm${RESET} — installed successfully                 │"
+echo "  │    ${DIM}Code search for the agent loop${RESET}                        │"
+echo "  │                                                            │"
+echo "  ╰────────────────────────────────────────────────────────────╯"
+printf "  %sInstall dir:%s  %s\n\n" "$DIM" "$RESET" "$install_dir"
+printf "  %sGet started in 3 steps%s\n\n" "$BOLD" "$RESET"
+printf "  %s①%s  %sSet up a project%s\n" "$YELLOW" "$RESET" "$BOLD"
+printf "     %s\$ cd <your-project> && greplm setup%s\n" "$GREEN" "$RESET"
+printf "     %sindex + warm daemon%s\n\n" "$DIM" "$RESET"
+printf "  %s②%s  %sConnect your AI editor%s\n" "$YELLOW" "$RESET" "$BOLD"
+printf "     %s\$ greplm mcp config%s\n" "$GREEN" "$RESET"
+printf "     %spaste JSON → .cursor/mcp.json · Claude · VS Code%s\n\n" "$DIM" "$RESET"
+printf "  %s③%s  %sTeach your editor%s\n" "$YELLOW" "$RESET" "$BOLD"
+printf "     %s\$ greplm agent add%s\n" "$GREEN" "$RESET"
+printf "     %sauto-detects Cursor, Claude, Copilot, …%s\n\n" "$DIM" "$RESET"
+echo "  ──────────────────────────────────────────────────────────────"
+printf "  %sShow steps again:%s  greplm welcome\n" "$DIM" "$RESET"
+printf "  %sBinaries:%s         ${install_dir}/greplm\n" "$DIM" "$RESET"
+printf "                      ${install_dir}/greplm-mcp\n"
+echo

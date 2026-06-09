@@ -1,6 +1,8 @@
 //! greplm command-line interface.
 
 mod agent;
+mod mcp;
+mod onboard;
 mod ops;
 
 use std::collections::BTreeSet;
@@ -104,6 +106,11 @@ enum Command {
     /// Install the bundled greplm agent definition for a coding tool.
     #[command(subcommand)]
     Agent(AgentCommand),
+    /// MCP client configuration (copy-paste JSON for Cursor, Claude, etc.).
+    #[command(subcommand)]
+    Mcp(McpCommand),
+    /// Show first-run next steps (index, MCP, agent files).
+    Welcome(WelcomeArgs),
     /// Diagnose common problems (and with --fix, repair the safe ones).
     Doctor(DoctorArgs),
     /// Update greplm to the latest release.
@@ -148,6 +155,32 @@ enum AgentCommand {
     Add(AgentAddArgs),
     /// List supported tools and their destination paths.
     List(AgentListArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum McpCommand {
+    /// Print MCP client JSON (stdout) with paste hints (stderr).
+    Config(McpConfigArgs),
+}
+
+#[derive(Debug, Args)]
+struct McpConfigArgs {
+    /// Project root passed to greplm-mcp (defaults to the current directory).
+    #[arg(long, short = 'C')]
+    root: Option<PathBuf>,
+    /// Pretty-print the JSON (easier to read; same content).
+    #[arg(long)]
+    pretty: bool,
+    /// Print JSON only — no hints on stderr.
+    #[arg(long, short = 'q')]
+    quiet: bool,
+}
+
+#[derive(Debug, Args)]
+struct WelcomeArgs {
+    /// Project root (defaults to the current directory).
+    #[arg(long, short = 'C')]
+    root: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -623,6 +656,15 @@ fn run() -> Result<()> {
         Command::SemanticSearch(args) => cmd_semantic_search(args),
         Command::Savings(args) => cmd_savings(args),
         Command::Agent(cmd) => cmd_agent(cmd),
+        Command::Mcp(cmd) => cmd_mcp(cmd),
+        Command::Welcome(args) => {
+            let root = match args.root {
+                Some(r) => r,
+                None => cwd()?,
+            };
+            onboard::print_next_steps(&root);
+            Ok(())
+        }
         Command::Doctor(args) => {
             let root = match args.root {
                 Some(r) => r,
@@ -657,6 +699,18 @@ fn cmd_agent(cmd: AgentCommand) -> Result<()> {
                 None => cwd()?,
             };
             agent::list(&root, args.global)
+        }
+    }
+}
+
+fn cmd_mcp(cmd: McpCommand) -> Result<()> {
+    match cmd {
+        McpCommand::Config(args) => {
+            let root = match args.root {
+                Some(r) => r,
+                None => cwd()?,
+            };
+            mcp::print_config(&root, args.pretty, args.quiet)
         }
     }
 }
