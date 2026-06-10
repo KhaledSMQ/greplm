@@ -23,7 +23,6 @@
 //! tables and derived lookup maps live in an [`Arc<SegmentData>`] that a
 //! reloading searcher can share instead of re-parsing (see [`Segment::reopen`]).
 
-use std::collections::HashMap;
 use std::io::BufWriter;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -159,20 +158,34 @@ fn unpack_card(value: u64) -> u64 {
 // ---------------------------------------------------------------------------
 
 /// Accumulates documents and builds a segment on disk.
-#[derive(Default)]
+///
+/// Symbols and refs stream straight into the columnar table builders as docs
+/// are added — the writer never materializes per-row structs, so peak memory
+/// during a build is the packed table bytes plus the postings pairs.
 pub struct SegmentWriter {
     docs: Vec<DocMeta>,
-    syms: Vec<SymbolEntry>,
-    refs: Vec<RefEntry>,
+    syms: crate::table::SymTableBuilder,
+    refs: crate::table::RefTableBuilder,
     /// Flat postings pairs, `(trigram key << 32) | doc_id`, inverted by one
     /// parallel sort at write time (Lucene-style sort-based inversion) instead
     /// of millions of cache-hostile tree probes during the build.
     pairs: Vec<u64>,
 }
 
+impl Default for SegmentWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SegmentWriter {
     pub fn new() -> Self {
-        Self::default()
+        SegmentWriter {
+            docs: Vec::new(),
+            syms: crate::table::SymTableBuilder::new(),
+            refs: crate::table::RefTableBuilder::new(),
+            pairs: Vec::new(),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -204,40 +217,54 @@ impl SegmentWriter {
                 .iter()
                 .map(|t| (u64::from(trigram::key_of(t)) << 32) | u64::from(doc_id)),
         );
-        for s in symbols {
-            self.syms.push(SymbolEntry {
-                doc_id,
-                name: s.name,
-                kind: s.kind,
-                line_start: s.line_start,
-                line_end: s.line_end,
-                container: s.container,
-                signature: s.signature,
-            });
+        for s in &symbols {
+            self.syms
+                .push(
+                    doc_id,
+                    &s.name,
+                    &s.kind,
+                    s.line_start,
+                    s.line_end,
+                    s.container.as_deref(),
+                    s.signature.as_deref(),
+                )
+                .expect("writer doc ids are ascending");
         }
-        for r in refs {
-            self.refs.push(RefEntry {
-                doc_id,
-                name: r.name,
-                kind: r.kind,
-                line: r.line,
-                column: r.column,
-            });
+        for r in &refs {
+            self.refs
+                .push(doc_id, &r.name, r.kind, r.line, r.column)
+                .expect("writer doc ids are ascending");
         }
         doc_id
     }
 
     /// Serialize this segment to disk under the given segment id.
     pub fn write(self, paths: &Paths, seg_id: u64) -> Result<()> {
-        std::fs::create_dir_all(paths.segments_dir())
-            .map_err(|e| Error::io(paths.segments_dir(), e))?;
-        let (post_blob, fst_entries) = build_postings_blob(self.pairs)?;
+        let SegmentWriter {
+            docs,
+            syms,
+            refs,
+            pairs,
+        } = self;
+        // The postings inversion and the two table finishes (each ending in a
+        // parallel name sort) are independent; overlap them.
+        let (postings, tables) = rayon::join(
+            || build_postings_blob(pairs),
+            || {
+                rayon::join(
+                    || syms.finish(docs.len()),
+                    || refs.finish(docs.len()),
+                )
+            },
+        );
+        let (post_blob, fst_entries) = postings?;
+        let (syms_enc, refs_enc) = tables;
         write_segment_files(
             paths,
             seg_id,
-            &self.docs,
-            &self.syms,
-            &self.refs,
+            &docs,
+            syms_enc?,
+            refs_enc?,
             &fst_entries,
             post_blob,
         )
@@ -283,13 +310,14 @@ fn read_table<T: serde::de::DeserializeOwned>(
 
 /// Serialize the components of a segment to disk atomically. Shared by the
 /// incremental writer and by compaction's merge path. Takes the postings blob
-/// by value to append its checksum footer without copying.
+/// by value to append its checksum footer without copying; the side tables
+/// arrive pre-encoded and are streamed to disk section by section.
 pub(crate) fn write_segment_files(
     paths: &Paths,
     seg_id: u64,
     docs: &[DocMeta],
-    syms: &[SymbolEntry],
-    refs: &[RefEntry],
+    syms: crate::table::EncodedTable,
+    refs: crate::table::EncodedTable,
     fst_entries: &[(Trigram, u64)],
     mut post_blob: Vec<u8>,
 ) -> Result<()> {
@@ -309,12 +337,10 @@ pub(crate) fn write_segment_files(
 
     append_checksum(&mut post_blob);
     write_atomic(&paths.post_file(seg_id), &post_blob)?;
-    // Side tables use postcard (compact binary) rather than JSON: on large trees
-    // these dominate on-disk size and cold-start parse time. The hot path (FST +
-    // roaring + mmap) is unaffected.
+    // The doc table is small (one row per file) and eagerly decoded at open.
     write_atomic(&paths.docs_file(seg_id), &encode_table(docs)?)?;
-    write_atomic(&paths.syms_file(seg_id), &encode_table(syms)?)?;
-    write_atomic(&paths.refs_file(seg_id), &encode_table(refs)?)?;
+    syms.write_atomic(&paths.syms_file(seg_id))?;
+    refs.write_atomic(&paths.refs_file(seg_id))?;
 
     // Initially every doc is live.
     let mut live = RoaringBitmap::new();
@@ -330,30 +356,76 @@ pub(crate) type PostingsBlob = (Vec<u8>, Vec<(Trigram, u64)>);
 
 /// Build the postings blob and the (trigram, packed offset+cardinality) FST
 /// entries from flat `(trigram key << 32) | doc_id` pairs: one parallel sort,
-/// then a single linear pass that streams each run straight into the blob.
+/// then a parallel serialization pass over chunks split at trigram-run
+/// boundaries (each chunk serializes whole runs into a local buffer with
+/// local offsets; the chunks are then concatenated with one offset fix-up).
 fn build_postings_blob(mut pairs: Vec<u64>) -> Result<PostingsBlob> {
     use rayon::prelude::*;
     pairs.par_sort_unstable();
-    let mut post_blob: Vec<u8> = Vec::new();
-    let mut fst_entries: Vec<(Trigram, u64)> = Vec::new();
-    let mut i = 0usize;
-    while i < pairs.len() {
-        let key = (pairs[i] >> 32) as u32;
-        let start = i;
-        while i < pairs.len() && (pairs[i] >> 32) as u32 == key {
-            i += 1;
+    if pairs.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    // Chunk boundaries, advanced to the next run boundary so no trigram's
+    // postings straddle two chunks.
+    let n = pairs.len();
+    let parts = rayon::current_num_threads().clamp(1, 64);
+    let mut bounds: Vec<usize> = vec![0];
+    for p in 1..parts {
+        // `max(1)` keeps the look-behind in bounds when n < parts.
+        let mut at = (n * p / parts).max(1);
+        while at < n && (pairs[at - 1] >> 32) == (pairs[at] >> 32) {
+            at += 1;
         }
-        // Within a run, doc ids are strictly ascending: the run is a sorted
-        // u64 range sharing its high 32 bits, and each doc contributes a
-        // trigram at most once (extract() yields distinct trigrams).
-        let mut bm =
-            RoaringBitmap::from_sorted_iter(pairs[start..i].iter().map(|&p| p as u32))
-                .map_err(|e| Error::other(format!("postings pairs not sorted: {e}")))?;
-        bm.optimize();
-        let offset = post_blob.len() as u64;
-        bm.serialize_into(&mut post_blob)
-            .map_err(|e| Error::other(format!("roaring serialize: {e}")))?;
-        fst_entries.push((trigram::tri_of(key), pack_entry(offset, bm.len())?));
+        if at > *bounds.last().expect("non-empty") && at < n {
+            bounds.push(at);
+        }
+    }
+    bounds.push(n);
+
+    // Per chunk: a local blob plus (key, local offset, cardinality) entries.
+    type Chunk = (Vec<u8>, Vec<(u32, u64, u64)>);
+    let chunks: Vec<Chunk> = bounds
+        .par_windows(2)
+        .map(|w| {
+            let span = &pairs[w[0]..w[1]];
+            let mut blob: Vec<u8> = Vec::new();
+            let mut entries: Vec<(u32, u64, u64)> = Vec::new();
+            let mut i = 0usize;
+            while i < span.len() {
+                let key = (span[i] >> 32) as u32;
+                let start = i;
+                while i < span.len() && (span[i] >> 32) as u32 == key {
+                    i += 1;
+                }
+                // Within a run, doc ids are strictly ascending: the run is a
+                // sorted u64 range sharing its high 32 bits, and each doc
+                // contributes a trigram at most once (extract() deduplicates).
+                let mut bm =
+                    RoaringBitmap::from_sorted_iter(span[start..i].iter().map(|&p| p as u32))
+                        .map_err(|e| Error::other(format!("postings pairs not sorted: {e}")))?;
+                bm.optimize();
+                let offset = blob.len() as u64;
+                bm.serialize_into(&mut blob)
+                    .map_err(|e| Error::other(format!("roaring serialize: {e}")))?;
+                entries.push((key, offset, bm.len()));
+            }
+            Ok((blob, entries))
+        })
+        .collect::<Result<_>>()?;
+    drop(pairs);
+
+    // Stitch: concatenate blobs and rebase each chunk's offsets.
+    let total: usize = chunks.iter().map(|(b, _)| b.len()).sum();
+    let mut post_blob: Vec<u8> = Vec::with_capacity(total);
+    let mut fst_entries: Vec<(Trigram, u64)> =
+        Vec::with_capacity(chunks.iter().map(|(_, e)| e.len()).sum());
+    for (blob, entries) in chunks {
+        let base = post_blob.len() as u64;
+        post_blob.extend_from_slice(&blob);
+        for (key, offset, card) in entries {
+            fst_entries.push((trigram::tri_of(key), pack_entry(base + offset, card)?));
+        }
     }
     Ok((post_blob, fst_entries))
 }
@@ -419,29 +491,12 @@ pub struct SegmentData {
     /// footer); posting offsets must never slice past this.
     post_len: usize,
     pub docs: Vec<DocMeta>,
-    pub syms: Vec<SymbolEntry>,
-    pub refs: Vec<RefEntry>,
-    /// Symbol indices grouped by `doc_id` (a flattened CSR layout). Together with
-    /// `sym_start` this gives O(1) access to a document's symbols instead of a
-    /// full scan of `syms`.
-    sym_order: Vec<u32>,
-    /// Prefix offsets into `sym_order`; `sym_start[d]..sym_start[d + 1]` is the
-    /// slice of symbol indices belonging to doc `d`. Length is `docs.len() + 1`.
-    sym_start: Vec<u32>,
-    /// Reference indices grouped by `doc_id` (CSR layout, mirrors `sym_order`).
-    ref_order: Vec<u32>,
-    /// Prefix offsets into `ref_order`; length is `docs.len() + 1`.
-    ref_start: Vec<u32>,
-    /// Lowercased symbol names, parallel to `syms`, precomputed once at open.
-    sym_name_lower: Vec<String>,
-    /// Symbol indices grouped by lowercased name. Turns name lookups
-    /// (definitions, exact symbol queries) into O(results) instead of a scan
-    /// of every symbol per query.
-    sym_by_lower: HashMap<Box<str>, Vec<u32>>,
-    /// Reference indices (calls *and* imports) grouped by referent name. Lets
-    /// callers / references / blast-radius look up by name in O(results)
-    /// instead of scanning every ref each query.
-    ref_by_name: HashMap<Box<str>, Vec<u32>>,
+    /// Columnar mmap-backed symbol table: rows decode on demand, name lookups
+    /// go through a persisted FST, and the fuzzy-scan path walks packed name
+    /// columns — nothing is materialized at open.
+    syms: crate::table::SymTable,
+    /// Columnar reference table; `None` when the segment has no refs file.
+    refs: Option<crate::table::RefTable>,
 }
 
 /// A read-only, mmap-backed view of a segment: shared immutable data plus this
@@ -484,39 +539,29 @@ impl Segment {
         let post_len = verify_checksum(&post, "postings blob")?.len();
 
         let docs: Vec<DocMeta> = read_table(&paths.docs_file(seg_id), "docs table")?;
-        let syms: Vec<SymbolEntry> = read_table(&paths.syms_file(seg_id), "symbol table")?;
+        let syms = crate::table::SymTable::open(&paths.syms_file(seg_id))?;
 
         // Tolerate a missing refs file (treat as no refs) so a segment written
         // without any references can still be opened read-only.
         let refs_path = paths.refs_file(seg_id);
-        let refs: Vec<RefEntry> = match std::fs::read(&refs_path) {
-            Ok(bytes) => postcard::from_bytes(verify_checksum(&bytes, "refs table")?)?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => return Err(Error::io(&refs_path, e)),
+        let refs = match crate::table::RefTable::open(&refs_path) {
+            Ok(t) => Some(t),
+            Err(Error::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e),
         };
 
+        // The side tables and the docs table are separate files; make sure
+        // they belong to the same generation, otherwise per-doc CSR lookups
+        // would silently return the wrong rows.
+        if syms.doc_count() != docs.len()
+            || refs.as_ref().is_some_and(|r| r.doc_count() != docs.len())
+        {
+            return Err(Error::Corrupt(format!(
+                "segment {seg_id}: side-table doc count does not match docs table"
+            )));
+        }
+
         let live = read_bitmap(&paths.live_file(seg_id))?;
-
-        let (sym_order, sym_start) = build_doc_index(docs.len(), syms.iter().map(|s| s.doc_id));
-        let (ref_order, ref_start) = build_doc_index(docs.len(), refs.iter().map(|r| r.doc_id));
-        let sym_name_lower: Vec<String> =
-            syms.iter().map(|s| s.name.to_ascii_lowercase()).collect();
-
-        let mut sym_by_lower: HashMap<Box<str>, Vec<u32>> = HashMap::new();
-        for (i, lower) in sym_name_lower.iter().enumerate() {
-            sym_by_lower
-                .entry(lower.as_str().into())
-                .or_default()
-                .push(i as u32);
-        }
-
-        let mut ref_by_name: HashMap<Box<str>, Vec<u32>> = HashMap::new();
-        for (i, r) in refs.iter().enumerate() {
-            ref_by_name
-                .entry(r.name.as_str().into())
-                .or_default()
-                .push(i as u32);
-        }
 
         Ok(Segment {
             id: seg_id,
@@ -527,13 +572,6 @@ impl Segment {
                 docs,
                 syms,
                 refs,
-                sym_order,
-                sym_start,
-                ref_order,
-                ref_start,
-                sym_name_lower,
-                sym_by_lower,
-                ref_by_name,
             }),
             live,
         })
@@ -607,60 +645,71 @@ impl SegmentData {
         self.docs.get(doc_id as usize)
     }
 
-    /// The symbols defined in `doc_id`, in storage order. O(1) lookup.
-    pub fn doc_syms(&self, doc_id: u32) -> impl Iterator<Item = &SymbolEntry> {
-        let d = doc_id as usize;
-        let (lo, hi) = if d + 1 < self.sym_start.len() {
-            (self.sym_start[d] as usize, self.sym_start[d + 1] as usize)
-        } else {
-            (0, 0)
-        };
-        self.sym_order[lo..hi]
-            .iter()
-            .map(move |&i| &self.syms[i as usize])
+    /// Number of symbol rows in this segment (live or not).
+    pub fn sym_count(&self) -> usize {
+        self.syms.len()
     }
 
-    /// The references (calls + imports) originating in `doc_id`. O(1) lookup.
-    pub fn doc_refs(&self, doc_id: u32) -> impl Iterator<Item = &RefEntry> {
-        let d = doc_id as usize;
-        let (lo, hi) = if d + 1 < self.ref_start.len() {
-            (self.ref_start[d] as usize, self.ref_start[d + 1] as usize)
-        } else {
-            (0, 0)
-        };
-        self.ref_order[lo..hi]
+    /// Decode symbol row `i`. `None` for out-of-range ids or a corrupt row.
+    pub fn sym(&self, i: u32) -> Option<SymbolEntry> {
+        self.syms.get(i)
+    }
+
+    /// `(row id, name, lowercased name)` of every symbol — the fuzzy-scan
+    /// path. Walks the packed name columns only; rows are decoded lazily by
+    /// the caller for actual matches.
+    pub fn sym_names(&self) -> impl Iterator<Item = (u32, &str, &str)> {
+        self.syms.names()
+    }
+
+    /// The symbols defined in `doc_id`, in storage order. O(1) range lookup.
+    pub fn doc_syms(&self, doc_id: u32) -> impl Iterator<Item = SymbolEntry> + '_ {
+        self.syms
+            .doc_range(doc_id)
+            .filter_map(move |i| self.syms.get(i))
+    }
+
+    /// Number of symbols defined in `doc_id`, without decoding any row.
+    pub fn doc_sym_count(&self, doc_id: u32) -> u32 {
+        let r = self.syms.doc_range(doc_id);
+        r.end - r.start
+    }
+
+    /// The references (calls + imports) originating in `doc_id`.
+    pub fn doc_refs(&self, doc_id: u32) -> impl Iterator<Item = RefEntry> + '_ {
+        self.refs
             .iter()
-            .map(move |&i| &self.refs[i as usize])
+            .flat_map(move |t| t.doc_range(doc_id).filter_map(move |i| t.get(i)))
     }
 
     /// References (calls and imports) whose name is exactly `name`, via the
-    /// prebuilt name index (O(results), no full scan). Liveness is not filtered
-    /// here; callers that care should check [`Segment::is_live`].
-    pub fn refs_named(&self, name: &str) -> impl Iterator<Item = &RefEntry> {
-        self.ref_by_name
-            .get(name)
-            .into_iter()
-            .flatten()
-            .map(move |&i| &self.refs[i as usize])
+    /// persisted name index (O(results), no full scan). Liveness is not
+    /// filtered here; callers that care should check [`Segment::is_live`].
+    pub fn refs_named<'s>(&'s self, name: &'s str) -> impl Iterator<Item = RefEntry> + 's {
+        self.refs
+            .iter()
+            .flat_map(move |t| t.rows_named(name).filter_map(move |i| t.get(i)))
     }
 
     /// Call sites whose callee is exactly `name` (see [`Self::refs_named`]).
-    pub fn calls_to(&self, name: &str) -> impl Iterator<Item = &RefEntry> {
+    pub fn calls_to<'s>(&'s self, name: &'s str) -> impl Iterator<Item = RefEntry> + 's {
         self.refs_named(name).filter(|r| r.kind == RefKind::Call)
     }
 
-    /// Indices into `syms` whose lowercased name is exactly `lower`.
-    /// O(results) via the prebuilt name index.
-    pub fn syms_by_lower(&self, lower: &str) -> &[u32] {
-        self.sym_by_lower
-            .get(lower)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
+    /// Symbol row ids whose lowercased name is exactly `lower`. O(results)
+    /// via the persisted name FST.
+    pub fn syms_by_lower<'s>(&'s self, lower: &'s str) -> impl Iterator<Item = u32> + 's {
+        self.syms.rows_named(lower)
     }
 
-    /// Lowercased name of the symbol at index `i` in `syms`.
-    pub fn sym_name_lower(&self, i: usize) -> &str {
-        &self.sym_name_lower[i]
+    /// Name of symbol row `i` (borrowed from the name column).
+    pub fn sym_name(&self, i: u32) -> &str {
+        self.syms.name(i)
+    }
+
+    /// Lowercased name of symbol row `i` (borrowed from the name column).
+    pub fn sym_name_lower(&self, i: u32) -> &str {
+        self.syms.name_lower(i)
     }
 
     /// The packed FST entry for a trigram: posting offset + cardinality.
@@ -726,39 +775,6 @@ impl SegmentData {
         }
         Ok(acc.unwrap_or_default())
     }
-}
-
-/// Build a CSR-style index grouping row indices by their `doc_id`. Shared by
-/// the symbol and reference per-document lookups.
-fn build_doc_index(n: usize, doc_ids: impl Iterator<Item = u32> + Clone) -> (Vec<u32>, Vec<u32>) {
-    let mut counts = vec![0u32; n + 1];
-    let mut total = 0usize;
-    for d in doc_ids.clone() {
-        let d = d as usize;
-        if d < n {
-            counts[d] += 1;
-            total += 1;
-        }
-    }
-    // Prefix-sum into start offsets.
-    let mut start = vec![0u32; n + 1];
-    let mut acc = 0u32;
-    for d in 0..n {
-        start[d] = acc;
-        acc += counts[d];
-    }
-    start[n] = acc;
-    // Scatter row indices into their doc's slot.
-    let mut order = vec![0u32; total];
-    let mut cursor: Vec<u32> = start[..n].to_vec();
-    for (i, d) in doc_ids.enumerate() {
-        let d = d as usize;
-        if d < n {
-            order[cursor[d] as usize] = i as u32;
-            cursor[d] += 1;
-        }
-    }
-    (order, start)
 }
 
 pub(crate) fn write_bitmap(path: &std::path::Path, bm: &RoaringBitmap) -> Result<()> {

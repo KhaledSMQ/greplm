@@ -1081,13 +1081,16 @@ fn corrupt_symbol_table_fails_checksum_cleanly() {
     let seg = *meta.segments.first().expect("one segment");
     let syms_path = paths.syms_file(seg);
     let mut bytes = std::fs::read(&syms_path).unwrap();
-    let mid = bytes.len() / 2;
-    bytes[mid] ^= 0xFF;
+    // The columnar table verifies every section except the row data at open;
+    // the last section (the kind table) is one of them, so flipping the final
+    // byte must fail its checksum.
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0xFF;
     std::fs::write(&syms_path, &bytes).unwrap();
 
     assert!(
         g.searcher().is_err(),
-        "a flipped bit in the symbol table must fail the checksum at open"
+        "a flipped bit in a verified symbol-table section must fail open"
     );
 
     let hits = g

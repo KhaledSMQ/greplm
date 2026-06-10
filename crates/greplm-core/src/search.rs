@@ -571,7 +571,13 @@ impl Searcher {
     pub fn symbols(&self, query: &SymbolQuery) -> Result<Vec<SymbolHit>> {
         let needle = query.name.to_ascii_lowercase();
         let mut hits: Vec<SymbolHit> = Vec::new();
-        let mut consider = |seg: &Segment, i: usize, sym: &crate::segment::SymbolEntry| {
+        // Score a row that already passed the name match: decode it (rows are
+        // decoded only for matches), then apply the liveness/kind filters.
+        let mut consider = |seg: &Segment, i: u32, score: f32| {
+            let sym = match seg.sym(i) {
+                Some(s) => s,
+                None => return,
+            };
             if !seg.is_live(sym.doc_id) {
                 return;
             }
@@ -580,10 +586,6 @@ impl Searcher {
                     return;
                 }
             }
-            let score = match match_symbol(&sym.name, seg.sym_name_lower(i), &needle, query.exact) {
-                Some(s) => s,
-                None => return,
-            };
             let doc = match seg.doc(sym.doc_id) {
                 Some(d) => d,
                 None => return,
@@ -591,23 +593,37 @@ impl Searcher {
             hits.push(SymbolHit {
                 path: doc.path.clone(),
                 lang: doc.lang.clone(),
-                name: sym.name.clone(),
-                kind: sym.kind.clone(),
+                name: sym.name,
+                kind: sym.kind,
                 line_start: sym.line_start,
                 line_end: sym.line_end,
-                container: sym.container.clone(),
-                signature: sym.signature.clone(),
+                container: sym.container,
+                signature: sym.signature,
                 score: score + path_score(&doc.path),
             });
         };
         for seg in &self.segments {
             if query.exact {
-                for &i in seg.syms_by_lower(&needle) {
-                    consider(seg, i as usize, &seg.syms[i as usize]);
+                let rows: Vec<u32> = seg.syms_by_lower(&needle).collect();
+                for i in rows {
+                    let score =
+                        match match_symbol(seg.sym_name(i), seg.sym_name_lower(i), &needle, true) {
+                            Some(s) => s,
+                            None => continue,
+                        };
+                    consider(seg, i, score);
                 }
             } else {
-                for (i, sym) in seg.syms.iter().enumerate() {
-                    consider(seg, i, sym);
+                // Fuzzy scan: walk the packed name columns; only matching rows
+                // are ever decoded.
+                let matches: Vec<(u32, f32)> = seg
+                    .sym_names()
+                    .filter_map(|(i, name, lower)| {
+                        match_symbol(name, lower, &needle, false).map(|s| (i, s))
+                    })
+                    .collect();
+                for (i, score) in matches {
+                    consider(seg, i, score);
                 }
             }
         }
@@ -661,14 +677,19 @@ impl Searcher {
     /// (case-sensitive), as `(segment index, symbol index, symbol)` tuples.
     /// O(results) via the per-segment name index — this is the inner loop of
     /// `blast_radius` and `context_pack`, so it must not scan.
-    fn defs_by_name(&self, name: &str) -> Vec<(usize, usize, &crate::segment::SymbolEntry)> {
+    fn defs_by_name(&self, name: &str) -> Vec<(usize, usize, crate::segment::SymbolEntry)> {
         let lower = name.to_ascii_lowercase();
         let mut out = Vec::new();
         for (si, seg) in self.segments.iter().enumerate() {
-            for &idx in seg.syms_by_lower(&lower) {
-                let sym = &seg.syms[idx as usize];
-                if sym.name == name && seg.is_live(sym.doc_id) {
-                    out.push((si, idx as usize, sym));
+            for idx in seg.syms_by_lower(&lower) {
+                // Cheap exact-case check on the name column before decoding.
+                if seg.sym_name(idx) != name {
+                    continue;
+                }
+                if let Some(sym) = seg.sym(idx) {
+                    if seg.is_live(sym.doc_id) {
+                        out.push((si, idx as usize, sym));
+                    }
                 }
             }
         }
@@ -690,17 +711,17 @@ impl Searcher {
     }
 
     /// The innermost symbol in `doc_id` whose line range contains `line`.
-    fn enclosing_symbol<'s>(
+    fn enclosing_symbol(
         &self,
-        seg: &'s Segment,
+        seg: &Segment,
         doc_id: u32,
         line: u32,
-    ) -> Option<&'s crate::segment::SymbolEntry> {
-        let mut best: Option<&crate::segment::SymbolEntry> = None;
+    ) -> Option<crate::segment::SymbolEntry> {
+        let mut best: Option<crate::segment::SymbolEntry> = None;
         for sym in seg.doc_syms(doc_id) {
             if sym.line_start <= line && line <= sym.line_end {
                 let span = sym.line_end - sym.line_start;
-                match best {
+                match &best {
                     Some(b) if (b.line_end - b.line_start) <= span => {}
                     _ => best = Some(sym),
                 }
@@ -718,18 +739,25 @@ impl Searcher {
         for seg in &self.segments {
             // Definitions and references are both looked up through the
             // per-segment name indexes (O(results), no table scans).
-            for &i in seg.syms_by_lower(&lower) {
-                let sym = &seg.syms[i as usize];
-                if sym.name == name && seg.is_live(sym.doc_id) {
+            let def_rows: Vec<u32> = seg.syms_by_lower(&lower).collect();
+            for i in def_rows {
+                if seg.sym_name(i) != name {
+                    continue;
+                }
+                let sym = match seg.sym(i) {
+                    Some(s) => s,
+                    None => continue,
+                };
+                if seg.is_live(sym.doc_id) {
                     if let Some(doc) = seg.doc(sym.doc_id) {
                         hits.push(RefHit {
                             path: doc.path.clone(),
                             lang: doc.lang.clone(),
-                            name: sym.name.clone(),
+                            name: sym.name,
                             kind: "definition".to_string(),
                             line: sym.line_start,
                             column: 1,
-                            container: sym.container.clone(),
+                            container: sym.container,
                         });
                     }
                 }
@@ -1137,45 +1165,49 @@ impl Searcher {
 
         let terms = context::tokenize(task);
 
-        // A candidate symbol with its location and provisional score.
+        // A candidate symbol (decoded once) with its location and score.
         struct Cand {
             seg: usize,
-            sym: usize,
+            sym: crate::segment::SymbolEntry,
             score: f32,
             reason: String,
         }
         let mut cands: Vec<Cand> = Vec::new();
         for (si, seg) in self.segments.iter().enumerate() {
-            for (idx, sym) in seg.syms.iter().enumerate() {
-                if !seg.is_live(sym.doc_id) {
+            // Walk per live document so dead docs never decode a row.
+            for doc_id in 0..seg.docs.len() as u32 {
+                if !seg.is_live(doc_id) {
                     continue;
                 }
-                let doc = match seg.doc(sym.doc_id) {
+                let doc = match seg.doc(doc_id) {
                     Some(d) => d,
                     None => continue,
                 };
-                let mut score = context::lexical_score(
-                    &sym.name,
-                    &sym.kind,
-                    sym.signature.as_deref(),
-                    sym.container.as_deref(),
-                    &doc.path,
-                    &terms,
-                );
-                if score <= 0.0 {
-                    continue;
+                for sym in seg.doc_syms(doc_id) {
+                    let mut score = context::lexical_score(
+                        &sym.name,
+                        &sym.kind,
+                        sym.signature.as_deref(),
+                        sym.container.as_deref(),
+                        &doc.path,
+                        &terms,
+                    );
+                    if score <= 0.0 {
+                        continue;
+                    }
+                    // Call-graph centrality, looked up only for the few symbols
+                    // that already cleared the lexical filter (via the
+                    // call-name index).
+                    let deg = self.call_indegree(&sym.name) as f32;
+                    score += (1.0 + deg).ln() * 1.5;
+                    score += path_score(&doc.path);
+                    cands.push(Cand {
+                        seg: si,
+                        sym,
+                        score,
+                        reason: "match".to_string(),
+                    });
                 }
-                // Call-graph centrality, looked up only for the few symbols that
-                // already cleared the lexical filter (via the call-name index).
-                let deg = self.call_indegree(&sym.name) as f32;
-                score += (1.0 + deg).ln() * 1.5;
-                score += path_score(&doc.path);
-                cands.push(Cand {
-                    seg: si,
-                    sym: idx,
-                    score,
-                    reason: "match".to_string(),
-                });
             }
         }
 
@@ -1189,25 +1221,21 @@ impl Searcher {
         // callees of the top matches so the agent sees what they depend on.
         let mut seen: HashSet<(String, u32)> = HashSet::new();
         for c in &cands {
-            let seg = &self.segments[c.seg];
-            let sym = &seg.syms[c.sym];
-            seen.insert((sym.name.clone(), sym.line_start));
+            seen.insert((c.sym.name.clone(), c.sym.line_start));
         }
         let mut extra: Vec<Cand> = Vec::new();
         for c in cands.iter().take(8) {
-            let seg = &self.segments[c.seg];
-            let sym = &seg.syms[c.sym];
-            for callee in self.callees(&sym.name, 12, 0) {
-                for (si2, idx, def) in self.defs_by_name(&callee.callee) {
+            for callee in self.callees(&c.sym.name, 12, 0) {
+                for (si2, _, def) in self.defs_by_name(&callee.callee) {
                     let key = (def.name.clone(), def.line_start);
                     if !seen.insert(key) {
                         continue;
                     }
                     extra.push(Cand {
                         seg: si2,
-                        sym: idx,
+                        sym: def,
                         score: c.score * 0.3,
-                        reason: format!("callee of {}", sym.name),
+                        reason: format!("callee of {}", c.sym.name),
                     });
                 }
             }
@@ -1230,7 +1258,7 @@ impl Searcher {
         const MAX_ITEM_LINES: u32 = 60;
         for c in &cands {
             let seg = &self.segments[c.seg];
-            let sym = &seg.syms[c.sym];
+            let sym = &c.sym;
             let doc = match seg.doc(sym.doc_id) {
                 Some(d) => d,
                 None => continue,
@@ -1325,7 +1353,8 @@ impl Searcher {
                 pa.partial_cmp(&pb).unwrap_or(std::cmp::Ordering::Equal)
             })
             .ok_or_else(|| Error::other(format!("no definition found for {name:?}")))?;
-        let (si, _, sym) = *best;
+        let (si, _, sym) = best;
+        let si = *si;
         let doc = self.segments[si]
             .doc(sym.doc_id)
             .ok_or_else(|| Error::other("definition document missing".to_string()))?;
@@ -1483,8 +1512,9 @@ impl Searcher {
                 e.bytes += doc.size;
                 let dir = doc.path.split('/').next().unwrap_or("").to_string();
                 *by_dir.entry(dir).or_default() += 1;
+                // Symbol counts come from the doc CSR — no row is decoded.
+                symbols += u64::from(seg.doc_sym_count(doc_id as u32));
             }
-            symbols += seg.syms.iter().filter(|s| seg.is_live(s.doc_id)).count() as u64;
         }
         let mut languages: Vec<LangStat> = by_lang
             .into_iter()

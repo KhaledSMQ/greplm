@@ -13,7 +13,7 @@ use crate::meta::{Meta, PendingTombstones};
 use crate::paths::Paths;
 use crate::segment::{
     merge_postings, read_bitmap, write_bitmap, write_segment_files, DocMeta, RawRef, RawSymbol,
-    RefEntry, Segment, SegmentWriter, SymbolEntry,
+    Segment, SegmentWriter,
 };
 use crate::trigram;
 use crate::walk::{self, SkipReason, Skipped, WalkEntry};
@@ -437,18 +437,18 @@ impl<'a> Indexer<'a> {
                     pf.symbols = seg
                         .doc_syms(src_doc)
                         .map(|s| RawSymbol {
-                            name: s.name.clone(),
-                            kind: s.kind.clone(),
+                            name: s.name,
+                            kind: s.kind,
                             line_start: s.line_start,
                             line_end: s.line_end,
-                            container: s.container.clone(),
-                            signature: s.signature.clone(),
+                            container: s.container,
+                            signature: s.signature,
                         })
                         .collect();
                     pf.refs = seg
                         .doc_refs(src_doc)
                         .map(|r| RawRef {
-                            name: r.name.clone(),
+                            name: r.name,
                             kind: r.kind,
                             line: r.line,
                             column: r.column,
@@ -739,8 +739,10 @@ impl<'a> Indexer<'a> {
             .collect::<Result<_>>()?;
 
         let mut docs: Vec<DocMeta> = Vec::new();
-        let mut syms: Vec<SymbolEntry> = Vec::new();
-        let mut refs: Vec<RefEntry> = Vec::new();
+        // Rows stream straight into the columnar builders; the merged tables
+        // are never materialized as entry vecs.
+        let mut syms = crate::table::SymTableBuilder::new();
+        let mut refs = crate::table::RefTableBuilder::new();
         let mut remaps: Vec<Vec<u32>> = Vec::with_capacity(segments.len());
         let mut upserts: Vec<(String, FileRecord)> = Vec::new();
         let new_seg_id = meta.alloc_segment();
@@ -757,24 +759,18 @@ impl<'a> Indexer<'a> {
                 remap[old_id as usize] = new_id;
                 let syms_before = syms.len();
                 for s in seg.doc_syms(old_id) {
-                    syms.push(SymbolEntry {
-                        doc_id: new_id,
-                        name: s.name.clone(),
-                        kind: s.kind.clone(),
-                        line_start: s.line_start,
-                        line_end: s.line_end,
-                        container: s.container.clone(),
-                        signature: s.signature.clone(),
-                    });
+                    syms.push(
+                        new_id,
+                        &s.name,
+                        &s.kind,
+                        s.line_start,
+                        s.line_end,
+                        s.container.as_deref(),
+                        s.signature.as_deref(),
+                    )?;
                 }
                 for r in seg.doc_refs(old_id) {
-                    refs.push(RefEntry {
-                        doc_id: new_id,
-                        name: r.name.clone(),
-                        kind: r.kind,
-                        line: r.line,
-                        column: r.column,
-                    });
+                    refs.push(new_id, &r.name, r.kind, r.line, r.column)?;
                 }
                 let doc_sym_count = (syms.len() - syms_before) as u32;
                 let (inode, mtime_ns) = existing
@@ -798,12 +794,23 @@ impl<'a> Indexer<'a> {
             remaps.push(remap);
         }
 
-        // Streaming postings merge: O(victims) state plus one output list.
-        let (post_blob, fst_entries) = merge_postings(&segments, &remaps)?;
-        drop(segments);
-
         let symbol_count = syms.len();
         let doc_count = docs.len();
+
+        // The streaming postings merge and the table finishes (each ending in
+        // a parallel name sort) are independent; overlap them.
+        let (postings, tables) = rayon::join(
+            || merge_postings(&segments, &remaps),
+            || {
+                rayon::join(
+                    || syms.finish(doc_count),
+                    || refs.finish(doc_count),
+                )
+            },
+        );
+        let (post_blob, fst_entries) = postings?;
+        let (syms_enc, refs_enc) = tables;
+        drop(segments);
 
         meta.segments.retain(|id| !victims.contains(id));
         if !docs.is_empty() {
@@ -811,8 +818,8 @@ impl<'a> Indexer<'a> {
                 self.paths,
                 new_seg_id,
                 &docs,
-                &syms,
-                &refs,
+                syms_enc?,
+                refs_enc?,
                 &fst_entries,
                 post_blob,
             )?;

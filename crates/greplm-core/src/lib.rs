@@ -28,6 +28,7 @@ pub mod segment;
 pub mod semantic;
 pub mod structural;
 pub mod symbol;
+pub(crate) mod table;
 pub mod trigram;
 pub mod walk;
 pub mod watch;

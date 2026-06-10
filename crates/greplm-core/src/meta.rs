@@ -17,7 +17,10 @@ use crate::error::{Error, Result};
 /// - v5 adds an xxh3 checksum footer to every segment file and the
 ///   `pending_tombstones` journal that makes incremental deletes atomic with
 ///   the manifest swap.
-pub const SCHEMA_VERSION: u32 = 5;
+/// - v6 switches the `syms`/`refs` side tables to a columnar mmap format
+///   (per-row offsets, doc CSR, packed name columns, persisted name FSTs)
+///   so segment open is O(1) instead of a full decode.
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// Tombstones that are published in the manifest but not yet applied to a
 /// segment's on-disk live bitmap.
