@@ -764,7 +764,7 @@ dependencies = [
 
 [[package]]
 name = "greplm-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -777,7 +777,7 @@ dependencies = [
 
 [[package]]
 name = "greplm-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -824,7 +824,7 @@ dependencies = [
 
 [[package]]
 name = "greplm-mcp"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "greplm-core",

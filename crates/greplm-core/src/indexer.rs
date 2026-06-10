@@ -271,8 +271,12 @@ impl<'a> Indexer<'a> {
             skipped: walk_skips,
         } = walk::walk(self.paths, self.config)?;
         let candidates: Vec<&WalkEntry> = entries.iter().collect();
-        let (processed, proc_skips) =
-            process_all(&candidates, self.backend, self.config, &RenameSources::new());
+        let (processed, proc_skips) = process_all(
+            &candidates,
+            self.backend,
+            self.config,
+            &RenameSources::new(),
+        );
 
         let seg_id = meta.alloc_segment();
         let mut writer = SegmentWriter::new();
@@ -805,12 +809,7 @@ impl<'a> Indexer<'a> {
         // a parallel name sort) are independent; overlap them.
         let (postings, tables) = rayon::join(
             || merge_postings(&segments, &remaps),
-            || {
-                rayon::join(
-                    || syms.finish(doc_count),
-                    || refs.finish(doc_count),
-                )
-            },
+            || rayon::join(|| syms.finish(doc_count), || refs.finish(doc_count)),
         );
         let (post_blob, fst_entries) = postings?;
         let (syms_enc, refs_enc) = tables;

@@ -250,12 +250,7 @@ impl SegmentWriter {
         // parallel name sort) are independent; overlap them.
         let (postings, tables) = rayon::join(
             || build_postings_blob(pairs),
-            || {
-                rayon::join(
-                    || syms.finish(docs.len()),
-                    || refs.finish(docs.len()),
-                )
-            },
+            || rayon::join(|| syms.finish(docs.len()), || refs.finish(docs.len())),
         );
         let (post_blob, fst_entries) = postings?;
         let (syms_enc, refs_enc) = tables;

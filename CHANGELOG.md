@@ -11,8 +11,46 @@ creates the GitHub release, and publishes the crates to crates.io (see
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-11
+
+A storage-engine release: the on-disk format moves to columnar, checksummed,
+mmap-backed segments (schema v6) and the whole write path is rebuilt around
+sort-based inversion and parallel serialization. Existing indexes rebuild
+automatically on the next index operation. On the Linux kernel (93k files,
+3.3M symbols) a full index build drops from 66s to 26s and the index shrinks
+from 1.0G to 760M, while warm queries answer in ~19 ms.
+
+### Added
+
+- **Integrity checksums (xxh3) on every segment section**, verified when a
+  segment is opened: corruption is detected up front and surfaces as a clean,
+  recoverable error instead of wrong results or a panic deep in a query.
+- **Atomic delete protocol**: deletions are journaled as pending tombstones and
+  published in the same atomic manifest write as the new segment, so readers
+  always see a consistent index — even if the indexer crashes mid-publish.
+  Readers apply the journal lazily; compaction retires it.
+- **Tiered auto-compaction**: segments merge automatically once
+  `merge_threshold` (default 16) accumulate, smallest first, so incremental
+  indexing can't degrade query latency by fragmenting the index.
+- **Rename fast-path**: a renamed file with identical content reuses its parsed
+  symbols and references instead of being re-parsed from scratch.
+
 ### Changed
 
+- **Columnar, mmap-backed symbol/reference tables** (index schema v6; old
+  indexes rebuild automatically): side tables are stored as packed columns and
+  decoded per-row on demand straight from the memory map. Opening a segment no
+  longer parses anything — cold start on a million-symbol index is effectively
+  instant and memory stays flat regardless of index size.
+- **The index write path was rebuilt**: trigram extraction dedups through a
+  thread-local bitset, postings are built by sort-based inversion
+  (`par_sort` over packed `(trigram, doc)` keys) with roaring bitmaps
+  serialized in parallel chunks, and symbol/reference tables stream through
+  incremental columnar builders straight to disk — no intermediate
+  materialization of the whole table in memory.
+- **Segment merges stream**: compaction k-way-merges postings and side tables
+  segment-by-segment instead of materializing the merged index in memory, so
+  merging huge segments no longer spikes RSS.
 - **Query planning is cardinality-aware** (index schema v4; old indexes rebuild
   automatically): each posting list's cardinality is packed into the trigram FST
   value, so AND-groups intersect only their ~4 rarest trigrams, rarest first,
@@ -46,8 +84,16 @@ creates the GitHub release, and publishes the crates to crates.io (see
 
 ### Fixed
 
+- **Schema upgrades no longer leak the old index on disk**: a full rebuild
+  triggered by an unreadable or version-bumped manifest now sweeps every
+  segment file the new manifest doesn't reference. Previously each schema
+  bump orphaned the entire previous index in `.greplm/segments/`.
 - `impact_of` (blast radius) now stops expanding the call graph as soon as the
   node limit is reached instead of finishing the current depth level.
+- The context-pack benchmark harness (`pack_bench.py`) measured a stale JSON
+  field after the pack output schema changed; real-world benchmark numbers in
+  the README and `bench/projects/RESULTS.md` were re-measured from scratch on
+  pristine indexes.
 
 ## [0.3.0] - 2026-06-09
 
@@ -150,7 +196,8 @@ creates the GitHub release, and publishes the crates to crates.io (see
   structural (AST) search, git time-travel, token-budgeted context packs, a warm
   query daemon, a CLI, and an MCP server — across 14 languages, fully offline.
 
-[Unreleased]: https://github.com/KhaledSMQ/greplm/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/KhaledSMQ/greplm/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/KhaledSMQ/greplm/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/KhaledSMQ/greplm/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/KhaledSMQ/greplm/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/KhaledSMQ/greplm/compare/v0.1.2...v0.1.3

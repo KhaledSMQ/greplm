@@ -747,7 +747,10 @@ impl RefTable {
         };
         Some(RefEntry {
             doc_id: row.doc_id,
-            name: self.core.str_at(SEC_NAME_OFFSETS, SEC_NAME_BYTES, i).to_string(),
+            name: self
+                .core
+                .str_at(SEC_NAME_OFFSETS, SEC_NAME_BYTES, i)
+                .to_string(),
             kind: row.kind,
             line: row.line,
             column: row.column,
