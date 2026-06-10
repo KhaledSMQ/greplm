@@ -325,9 +325,13 @@ impl<'a> Indexer<'a> {
 
         cache.replace_all(&upserts)?;
 
-        for id in old_segments {
-            self.remove_segment_files(id);
-        }
+        // Reclaim every segment file the new manifest doesn't reference — not
+        // just the ids the old manifest listed. A schema-version bump (or any
+        // unreadable manifest) takes the rebuild-from-scratch path above with
+        // an empty `old_segments`, and trusting it would leak the entire
+        // previous index on disk.
+        drop(old_segments);
+        self.sweep_unreferenced_segments(&meta.segments);
         Ok(stats)
     }
 
@@ -855,6 +859,29 @@ impl<'a> Indexer<'a> {
             segments: meta.segments.len(),
             ..Default::default()
         })
+    }
+
+    /// Best-effort removal of every `seg-*` file whose id is not in `live`.
+    /// Safe against concurrent readers: they hold mmaps/open fds, so unlink
+    /// only reclaims the space once they drop the segment.
+    fn sweep_unreferenced_segments(&self, live: &[u64]) {
+        let Ok(entries) = std::fs::read_dir(self.paths.segments_dir()) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let name = e.file_name();
+            let Some(id) = name
+                .to_str()
+                .and_then(|n| n.strip_prefix("seg-"))
+                .and_then(|rest| rest.split('.').next())
+                .and_then(|digits| digits.parse::<u64>().ok())
+            else {
+                continue;
+            };
+            if !live.contains(&id) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
     }
 
     /// Best-effort removal of all files belonging to a segment id.

@@ -85,7 +85,10 @@ def run_pack(task, root, budget):
 
 def item_chars(item):
     """Characters the agent consumes for one pack item: snippet + signature."""
-    chars = sum(len(l.get("text", "")) + 1 for l in item.get("snippet", []))
+    if "code" in item:
+        chars = len(item.get("code") or "")
+    else:  # legacy schema: snippet as a list of {text} lines
+        chars = sum(len(l.get("text", "")) + 1 for l in item.get("snippet", []))
     chars += len(item.get("signature") or "")
     return chars
 

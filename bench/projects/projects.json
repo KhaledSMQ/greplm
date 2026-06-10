@@ -13,7 +13,7 @@
       "language": "JavaScript / TypeScript",
       "queries": "react.queries.json",
       "tasks": "react.tasks.json",
-      "index": { "files": 6723, "symbols": 22491, "seconds": 1.97, "size": "38M" }
+      "index": { "files": 6723, "symbols": 22491, "seconds": 2.63, "size": "30M" }
     },
     {
       "name": "odoo18",
@@ -22,7 +22,7 @@
       "language": "Python / JS / XML",
       "queries": "odoo.queries.json",
       "tasks": "odoo.tasks.json",
-      "index": { "files": 41142, "symbols": 97844, "seconds": 19.75, "size": "176M" }
+      "index": { "files": 41142, "symbols": 97844, "seconds": 4.12, "size": "143M" }
     },
     {
       "name": "linux",
@@ -31,7 +31,7 @@
       "language": "C",
       "queries": "linux.queries.json",
       "tasks": "linux.tasks.json",
-      "index": { "files": 93362, "symbols": 3297692, "seconds": 66.48, "size": "1.0G" }
+      "index": { "files": 93362, "symbols": 3297692, "seconds": 26.47, "size": "760M" }
     }
   ]
 }

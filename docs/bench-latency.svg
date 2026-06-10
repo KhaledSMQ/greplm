@@ -27,18 +27,18 @@
 <text x="175" y="38" class="title">Warm query latency</text>
 <text x="175" y="60" class="sub">Median time per query — greplm (index built once, kept hot) vs ripgrep re-scanning the tree. Lower is better.</text>
 <text x="20" y="126" class="lab">React</text>
-<rect x="175" y="100" width="26.3" height="20" rx="4" class="track"/>
-<text x="209.3" y="115" class="val">ripgrep 108 ms</text>
+<rect x="175" y="100" width="33.4" height="20" rx="4" class="track"/>
+<text x="216.4" y="115" class="val">ripgrep 106 ms</text>
 <rect x="175" y="126" width="4.0" height="20" rx="4" class="gl"/>
-<text x="187.0" y="141" class="glval">greplm 9 ms · 12× faster</text>
+<text x="187.0" y="141" class="glval">greplm 8 ms · 13× faster</text>
 <text x="20" y="196" class="lab">Odoo 18</text>
-<rect x="175" y="170" width="264.2" height="20" rx="4" class="track"/>
-<text x="447.2" y="185" class="val">ripgrep 1083 ms</text>
-<rect x="175" y="196" width="7.9" height="20" rx="4" class="gl"/>
-<text x="190.9" y="211" class="glval">greplm 33 ms · 33× faster</text>
+<rect x="175" y="170" width="390.5" height="20" rx="4" class="track"/>
+<text x="573.5" y="185" class="val">ripgrep 1241 ms</text>
+<rect x="175" y="196" width="5.0" height="20" rx="4" class="gl"/>
+<text x="188.0" y="211" class="glval">greplm 16 ms · 79× faster</text>
 <text x="20" y="266" class="lab">Linux kernel</text>
 <rect x="175" y="240" width="567.0" height="20" rx="4" class="track"/>
-<text x="750.0" y="255" class="val">ripgrep 2323 ms</text>
-<rect x="175" y="266" width="7.6" height="20" rx="4" class="gl"/>
-<text x="190.6" y="281" class="glval">greplm 31 ms · 74× faster</text>
+<text x="750.0" y="255" class="val">ripgrep 1802 ms</text>
+<rect x="175" y="266" width="5.9" height="20" rx="4" class="gl"/>
+<text x="188.9" y="281" class="glval">greplm 19 ms · 96× faster</text>
 </svg>

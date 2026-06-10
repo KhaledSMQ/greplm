@@ -71,13 +71,13 @@ fraction of the tokens:
 The index is built once and kept warm, so every query is answered in
 milliseconds — while ripgrep re-scans the whole tree on each call:
 
-![Warm query latency: greplm daemon vs ripgrep — up to 74x faster](docs/bench-latency.svg)
+![Warm query latency: greplm daemon vs ripgrep — up to 96x faster](docs/bench-latency.svg)
 
 | Project | Files | Index once | Search tokens saved | Pack tokens saved | Recall | Warm query |
 |---------|------:|-----------:|:-------------------:|:-----------------:|:------:|-----------:|
-| React (JS/TS) | 6,723 | 2.0s | 99.7% | 97.4% | 100% | 9 ms |
-| Odoo 18 (Py/JS/XML) | 41,142 | 19.8s | 99.9% | 99.3% | 100% | 33 ms |
-| Linux kernel (C) | 93,362 | 66.5s | 99.9% | 98.4% | 100% | 31 ms |
+| React (JS/TS) | 6,723 | 2.6s | 99.7% | 97.4% | 100% | 8 ms |
+| Odoo 18 (Py/JS/XML) | 41,142 | 4.1s | 99.9% | 99.3% | 100% | 16 ms |
+| Linux kernel (C) | 93,362 | 26.5s | 99.9% | 98.4% | 100% | 19 ms |
 
 Across all three, the same content searches cost **218.7M tokens** the grep-and-read
 way versus **280.5k** with greplm. Full methodology, per-query tables, and the

@@ -11,17 +11,17 @@ Token cost of finding code two ways, on three large real codebases:
 
 | Project | Lang | Files | Index once | Search saved | Recall | Pack saved | Warm query ms | ripgrep ms |
 |---|---|---|---|---|---|---|---|---|
-| React (facebook/react) | JavaScript / TypeScript | 6 723 | 1.97s | 99.7% | 100% | 97.4% | 9.3 | 108 |
-| Odoo 18 (ERP) | Python / JS / XML | 41 142 | 19.75s | 99.9% | 100% | 99.3% | 32.6 | 1083 |
-| Linux kernel | C | 93 362 | 66.48s | 99.9% | 100% | 98.4% | 31.3 | 2323 |
+| React (facebook/react) | JavaScript / TypeScript | 6 723 | 2.63s | 99.7% | 100% | 97.4% | 8.4 | 106 |
+| Odoo 18 (ERP) | Python / JS / XML | 41 142 | 4.12s | 99.9% | 100% | 99.3% | 15.8 | 1241 |
+| Linux kernel | C | 93 362 | 26.47s | 99.9% | 100% | 98.4% | 18.8 | 1802 |
 
 *Warm query ms = median per-query latency against the always-on daemon (the real agent-loop scenario: index built once, stays hot). ripgrep ms re-scans the whole tree on every single query.*
 
-**Aggregate** — content search: 218.7M → 280.5k tokens (**99.9% fewer**). context packs: 9.5M → 120.4k tokens (**98.7% fewer**).
+**Aggregate** — content search: 218.7M → 280.5k tokens (**99.9% fewer**). context packs: 9.7M → 120.4k tokens (**98.8% fewer**).
 
 ## React (facebook/react)
 
-Index: 6,723 files · 22,491 symbols · built in 1.97s · 38M on disk.
+Index: 6,723 files · 22,491 symbols · built in 2.63s · 30M on disk.
 
 **Content search** (`greplm search` vs ripgrep + read whole files)
 
@@ -42,15 +42,15 @@ Index: 6,723 files · 22,491 symbols · built in 1.97s · 38M on disk.
 
 | task | items | files | baseline | pack | saved |
 |---|---|---|---|---|---|
-| use-state-internals | 187 | 54 | 469.1k | 8.1k | 98.3% |
-| effect-scheduling | 43 | 13 | 177.1k | 8.0k | 95.5% |
-| reconcile-children | 28 | 21 | 264.1k | 8.0k | 97.0% |
-| suspense-pending | 101 | 72 | 409.5k | 8.0k | 98.0% |
-| scheduler-priority | 61 | 27 | 206.0k | 8.0k | 96.1% |
+| use-state-internals | 189 | 53 | 469.1k | 8.1k | 98.3% |
+| effect-scheduling | 44 | 14 | 178.9k | 8.0k | 95.5% |
+| reconcile-children | 28 | 21 | 271.8k | 8.0k | 97.1% |
+| suspense-pending | 103 | 73 | 411.2k | 8.1k | 98.0% |
+| scheduler-priority | 57 | 25 | 215.6k | 8.0k | 96.3% |
 
 ## Odoo 18 (ERP)
 
-Index: 41,142 files · 97,844 symbols · built in 19.75s · 176M on disk.
+Index: 41,142 files · 97,844 symbols · built in 4.12s · 143M on disk.
 
 **Content search** (`greplm search` vs ripgrep + read whole files)
 
@@ -71,15 +71,15 @@ Index: 41,142 files · 97,844 symbols · built in 19.75s · 176M on disk.
 
 | task | items | files | baseline | pack | saved |
 |---|---|---|---|---|---|
-| computed-fields | 34 | 24 | 1.5M | 8.0k | 99.5% |
-| search-read | 57 | 41 | 944.1k | 8.0k | 99.2% |
-| onchange | 37 | 29 | 473.5k | 8.0k | 98.3% |
+| computed-fields | 35 | 25 | 1.5M | 8.0k | 99.5% |
+| search-read | 59 | 43 | 1.0M | 8.0k | 99.2% |
+| onchange | 37 | 29 | 488.3k | 8.0k | 98.4% |
 | model-inherit | 33 | 25 | 1.7M | 8.0k | 99.5% |
-| record-rules | 39 | 34 | 860.3k | 8.0k | 99.1% |
+| record-rules | 38 | 33 | 859.0k | 8.0k | 99.1% |
 
 ## Linux kernel
 
-Index: 93,362 files · 3,297,692 symbols · built in 66.48s · 1.0G on disk.
+Index: 93,362 files · 3,297,692 symbols · built in 26.47s · 760M on disk.
 
 **Content search** (`greplm search` vs ripgrep + read whole files)
 
@@ -100,9 +100,9 @@ Index: 93,362 files · 3,297,692 symbols · built in 66.48s · 1.0G on disk.
 
 | task | items | files | baseline | pack | saved |
 |---|---|---|---|---|---|
-| scheduler-pick-next | 43 | 23 | 552.1k | 8.0k | 98.5% |
-| skb-alloc | 266 | 49 | 593.4k | 8.1k | 98.6% |
-| copy-to-user | 71 | 34 | 391.9k | 8.0k | 98.0% |
-| workqueue | 111 | 46 | 637.2k | 8.0k | 98.7% |
-| kmalloc | 42 | 29 | 328.2k | 8.0k | 97.6% |
+| scheduler-pick-next | 44 | 24 | 552.4k | 8.0k | 98.5% |
+| skb-alloc | 269 | 49 | 593.4k | 8.1k | 98.6% |
+| copy-to-user | 72 | 35 | 396.4k | 8.0k | 98.0% |
+| workqueue | 112 | 46 | 682.6k | 8.0k | 98.8% |
+| kmalloc | 42 | 28 | 322.5k | 8.0k | 97.5% |
 

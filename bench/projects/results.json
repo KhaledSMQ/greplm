@@ -7,8 +7,8 @@
     "index": {
       "files": 6723,
       "symbols": 22491,
-      "seconds": 1.97,
-      "size": "38M"
+      "seconds": 2.63,
+      "size": "30M"
     },
     "search": {
       "greplm": "/Users/khaled/workspace/Github/greplm/target/release/greplm",
@@ -24,8 +24,8 @@
           "baseline_tokens": 1681874.5,
           "greplm_tokens": 11343.25,
           "saved_pct": 99.32555907114353,
-          "rg_ms": 224.44712498690933,
-          "greplm_ms": 74.95866599492729
+          "rg_ms": 154.89866700954735,
+          "greplm_ms": 71.50924997404218
         },
         {
           "id": "use-effect",
@@ -36,8 +36,8 @@
           "baseline_tokens": 1609944.0,
           "greplm_tokens": 5735.75,
           "saved_pct": 99.64372984401942,
-          "rg_ms": 99.0014590206556,
-          "greplm_ms": 65.77295804163441
+          "rg_ms": 96.89349995460361,
+          "greplm_ms": 22.00720796827227
         },
         {
           "id": "use-memo",
@@ -48,8 +48,8 @@
           "baseline_tokens": 960792.75,
           "greplm_tokens": 5531.75,
           "saved_pct": 99.4242514839959,
-          "rg_ms": 97.58445800980553,
-          "greplm_ms": 66.49574998300523
+          "rg_ms": 104.73570798058063,
+          "greplm_ms": 22.643000003881752
         },
         {
           "id": "use-context",
@@ -60,8 +60,8 @@
           "baseline_tokens": 945588.5,
           "greplm_tokens": 3667.25,
           "saved_pct": 99.61217273687232,
-          "rg_ms": 96.19479195680469,
-          "greplm_ms": 63.35858296370134
+          "rg_ms": 100.09116609580815,
+          "greplm_ms": 17.481958959251642
         },
         {
           "id": "use-reducer",
@@ -72,8 +72,8 @@
           "baseline_tokens": 556646.0,
           "greplm_tokens": 1101.0,
           "saved_pct": 99.80220822569461,
-          "rg_ms": 94.12174997851253,
-          "greplm_ms": 61.39133300166577
+          "rg_ms": 101.65095806587487,
+          "greplm_ms": 14.877291047014296
         },
         {
           "id": "use-transition",
@@ -84,8 +84,8 @@
           "baseline_tokens": 526790.25,
           "greplm_tokens": 836.5,
           "saved_pct": 99.84120814688579,
-          "rg_ms": 92.18441700795665,
-          "greplm_ms": 61.463541991543025
+          "rg_ms": 102.9495409457013,
+          "greplm_ms": 13.786250026896596
         },
         {
           "id": "suspense",
@@ -96,8 +96,8 @@
           "baseline_tokens": 2205952.25,
           "greplm_tokens": 3534.75,
           "saved_pct": 99.83976307737396,
-          "rg_ms": 92.78141701361164,
-          "greplm_ms": 62.540165963582695
+          "rg_ms": 94.66045803856105,
+          "greplm_ms": 17.738290945999324
         },
         {
           "id": "create-element",
@@ -108,8 +108,8 @@
           "baseline_tokens": 1980988.0,
           "greplm_tokens": 6415.75,
           "saved_pct": 99.67613382817059,
-          "rg_ms": 94.7692499612458,
-          "greplm_ms": 65.62208401737735
+          "rg_ms": 105.96058296505362,
+          "greplm_ms": 19.91024997550994
         },
         {
           "id": "flush-sync",
@@ -120,8 +120,8 @@
           "baseline_tokens": 870100.75,
           "greplm_tokens": 1053.25,
           "saved_pct": 99.87895079966314,
-          "rg_ms": 93.42750004725531,
-          "greplm_ms": 59.87050000112504
+          "rg_ms": 96.17874992545694,
+          "greplm_ms": 15.19625005312264
         },
         {
           "id": "scheduler",
@@ -132,8 +132,8 @@
           "baseline_tokens": 1639216.75,
           "greplm_tokens": 1744.0,
           "saved_pct": 99.89360772454283,
-          "rg_ms": 93.34533399669454,
-          "greplm_ms": 61.31670798640698
+          "rg_ms": 101.45145794376731,
+          "greplm_ms": 16.21208305004984
         }
       ],
       "summary": {
@@ -141,8 +141,8 @@
         "greplm_tokens": 40963.25,
         "saved_pct": 99.68436133945079,
         "mean_recall": 1.0,
-        "greplm_ms": 64.27902899449691,
-        "rg_ms": 107.78575019794516
+        "greplm_ms": 23.136183200404048,
+        "rg_ms": 105.94707889249548
       }
     },
     "pack": {
@@ -152,59 +152,59 @@
         {
           "id": "use-state-internals",
           "task": "how does the useState hook store and update component state",
-          "items": 187,
-          "files": 54,
-          "baseline_tokens": 469085.5,
-          "pack_tokens": 8064.25,
-          "saved_pct": 98.28085711453456
+          "items": 189,
+          "files": 53,
+          "baseline_tokens": 469051.25,
+          "pack_tokens": 8068.0,
+          "saved_pct": 98.27993209697235
         },
         {
           "id": "effect-scheduling",
           "task": "how are effects scheduled and flushed after commit",
-          "items": 43,
-          "files": 13,
-          "baseline_tokens": 177104.75,
-          "pack_tokens": 8012.75,
-          "saved_pct": 95.47570011532723
+          "items": 44,
+          "files": 14,
+          "baseline_tokens": 178853.75,
+          "pack_tokens": 8018.25,
+          "saved_pct": 95.51686783195767
         },
         {
           "id": "reconcile-children",
           "task": "how does the reconciler diff and reconcile children",
           "items": 28,
           "files": 21,
-          "baseline_tokens": 264117.25,
-          "pack_tokens": 8006.25,
-          "saved_pct": 96.96867584377772
+          "baseline_tokens": 271824.75,
+          "pack_tokens": 8009.0,
+          "saved_pct": 97.05361634656153
         },
         {
           "id": "suspense-pending",
           "task": "how does Suspense handle a thrown pending promise",
-          "items": 101,
-          "files": 72,
-          "baseline_tokens": 409476.75,
-          "pack_tokens": 8016.75,
-          "saved_pct": 98.04219653496811
+          "items": 103,
+          "files": 73,
+          "baseline_tokens": 411225.75,
+          "pack_tokens": 8053.25,
+          "saved_pct": 98.04164744060895
         },
         {
           "id": "scheduler-priority",
           "task": "how does the scheduler prioritize and time-slice work",
-          "items": 61,
-          "files": 27,
-          "baseline_tokens": 206015.0,
-          "pack_tokens": 8022.5,
-          "saved_pct": 96.10586607771279
+          "items": 57,
+          "files": 25,
+          "baseline_tokens": 215645.75,
+          "pack_tokens": 8016.0,
+          "saved_pct": 96.28279249649019
         }
       ],
       "summary": {
-        "baseline_tokens": 1525799.25,
-        "pack_tokens": 40122.5,
-        "saved_pct": 97.3703945653401
+        "baseline_tokens": 1546601.25,
+        "pack_tokens": 40164.5,
+        "saved_pct": 97.40304748880813
       }
     },
     "warm": {
-      "median_ms": 9.273270989069715,
-      "min_ms": 5.812791991047561,
-      "max_ms": 13.881709019187838
+      "median_ms": 8.369021001271904,
+      "min_ms": 6.161291967146099,
+      "max_ms": 12.444040970876813
     }
   },
   {
@@ -215,8 +215,8 @@
     "index": {
       "files": 41142,
       "symbols": 97844,
-      "seconds": 19.75,
-      "size": "176M"
+      "seconds": 4.12,
+      "size": "143M"
     },
     "search": {
       "greplm": "/Users/khaled/workspace/Github/greplm/target/release/greplm",
@@ -232,8 +232,8 @@
           "baseline_tokens": 2261250.75,
           "greplm_tokens": 4721.0,
           "saved_pct": 99.79122173867715,
-          "rg_ms": 1438.7760419631377,
-          "greplm_ms": 310.0400000112131
+          "rg_ms": 1385.184665909037,
+          "greplm_ms": 228.23429096024483
         },
         {
           "id": "transient-model",
@@ -244,8 +244,8 @@
           "baseline_tokens": 656189.75,
           "greplm_tokens": 5341.25,
           "saved_pct": 99.1860205070256,
-          "rg_ms": 1075.4528749966994,
-          "greplm_ms": 261.95712498156354
+          "rg_ms": 1200.8743750629947,
+          "greplm_ms": 42.45158296544105
         },
         {
           "id": "abstract-model",
@@ -256,8 +256,8 @@
           "baseline_tokens": 994033.5,
           "greplm_tokens": 5297.0,
           "saved_pct": 99.46712057491021,
-          "rg_ms": 1055.0756659940816,
-          "greplm_ms": 260.0616250419989
+          "rg_ms": 1529.8650419572368,
+          "greplm_ms": 41.47966601885855
         },
         {
           "id": "ondelete",
@@ -268,8 +268,8 @@
           "baseline_tokens": 24056737.0,
           "greplm_tokens": 9968.0,
           "saved_pct": 99.95856462162762,
-          "rg_ms": 1067.3179170116782,
-          "greplm_ms": 322.2383329994045
+          "rg_ms": 1204.305125051178,
+          "greplm_ms": 109.37845893204212
         },
         {
           "id": "onchange",
@@ -280,8 +280,8 @@
           "baseline_tokens": 8068915.0,
           "greplm_tokens": 11420.5,
           "saved_pct": 99.8584630027705,
-          "rg_ms": 1149.0937079652213,
-          "greplm_ms": 290.8332499791868
+          "rg_ms": 1191.2030420498922,
+          "greplm_ms": 77.25587498862296
         },
         {
           "id": "api-depends",
@@ -292,8 +292,8 @@
           "baseline_tokens": 3176764.25,
           "greplm_tokens": 10724.25,
           "saved_pct": 99.66241593155677,
-          "rg_ms": 979.0161669952795,
-          "greplm_ms": 266.34220901178196
+          "rg_ms": 1164.8553750710562,
+          "greplm_ms": 49.383209086954594
         },
         {
           "id": "many2one",
@@ -304,8 +304,8 @@
           "baseline_tokens": 4247076.0,
           "greplm_tokens": 20870.0,
           "saved_pct": 99.50860309540023,
-          "rg_ms": 1075.224625004921,
-          "greplm_ms": 268.1309579638764
+          "rg_ms": 1193.991333944723,
+          "greplm_ms": 54.56483399029821
         },
         {
           "id": "registry",
@@ -316,8 +316,8 @@
           "baseline_tokens": 36844319.5,
           "greplm_tokens": 24717.5,
           "saved_pct": 99.93291367479321,
-          "rg_ms": 1005.4485839791596,
-          "greplm_ms": 334.5713749877177
+          "rg_ms": 1206.2720420071855,
+          "greplm_ms": 122.97083309385926
         },
         {
           "id": "models-model",
@@ -328,8 +328,8 @@
           "baseline_tokens": 5285476.5,
           "greplm_tokens": 20164.75,
           "saved_pct": 99.6184875668258,
-          "rg_ms": 967.1739590121433,
-          "greplm_ms": 294.3643330363557
+          "rg_ms": 1173.9943749271333,
+          "greplm_ms": 73.87950003612787
         },
         {
           "id": "res-partner",
@@ -340,8 +340,8 @@
           "baseline_tokens": 36074689.5,
           "greplm_tokens": 31851.25,
           "saved_pct": 99.91170748676853,
-          "rg_ms": 1014.6254579885863,
-          "greplm_ms": 310.3701659711078
+          "rg_ms": 1161.5018750308082,
+          "greplm_ms": 95.18579195719212
         }
       ],
       "summary": {
@@ -349,8 +349,8 @@
         "greplm_tokens": 145075.5,
         "saved_pct": 99.88075867231554,
         "mean_recall": 1.0,
-        "greplm_ms": 291.89093739842065,
-        "rg_ms": 1082.7205000910908
+        "greplm_ms": 89.47840420296416,
+        "rg_ms": 1241.2047251011245
       }
     },
     "pack": {
@@ -360,59 +360,59 @@
         {
           "id": "computed-fields",
           "task": "how are computed fields recomputed when their dependencies change",
-          "items": 34,
-          "files": 24,
-          "baseline_tokens": 1543216.25,
-          "pack_tokens": 8009.0,
-          "saved_pct": 99.48101894339176
+          "items": 35,
+          "files": 25,
+          "baseline_tokens": 1546118.75,
+          "pack_tokens": 8009.25,
+          "saved_pct": 99.48197704736457
         },
         {
           "id": "search-read",
           "task": "how does the ORM execute a search_read query",
-          "items": 57,
-          "files": 41,
-          "baseline_tokens": 944099.0,
-          "pack_tokens": 8018.0,
-          "saved_pct": 99.1507246591724
+          "items": 59,
+          "files": 43,
+          "baseline_tokens": 1010974.25,
+          "pack_tokens": 8018.5,
+          "saved_pct": 99.20685418050954
         },
         {
           "id": "onchange",
           "task": "how are onchange methods triggered on a form view",
           "items": 37,
           "files": 29,
-          "baseline_tokens": 473497.0,
-          "pack_tokens": 8010.25,
-          "saved_pct": 98.30827861633759
+          "baseline_tokens": 488261.5,
+          "pack_tokens": 8013.25,
+          "saved_pct": 98.35882001755208
         },
         {
           "id": "model-inherit",
           "task": "how does model inheritance with _inherit extend an existing model",
           "items": 33,
           "files": 25,
-          "baseline_tokens": 1677320.25,
-          "pack_tokens": 8010.5,
-          "saved_pct": 99.5224227454477
+          "baseline_tokens": 1681430.75,
+          "pack_tokens": 8009.5,
+          "saved_pct": 99.52364972509275
         },
         {
           "id": "record-rules",
           "task": "how are record rules applied for access control",
-          "items": 39,
-          "files": 34,
-          "baseline_tokens": 860316.25,
-          "pack_tokens": 8014.75,
-          "saved_pct": 99.06839490710539
+          "items": 38,
+          "files": 33,
+          "baseline_tokens": 859008.5,
+          "pack_tokens": 8012.0,
+          "saved_pct": 99.06729677296558
         }
       ],
       "summary": {
-        "baseline_tokens": 5498448.75,
+        "baseline_tokens": 5585793.75,
         "pack_tokens": 40062.5,
-        "saved_pct": 99.27138540665675
+        "saved_pct": 99.28277874563484
       }
     },
     "warm": {
-      "median_ms": 32.566500012762845,
-      "min_ms": 12.40866701118648,
-      "max_ms": 310.94037502771243
+      "median_ms": 15.82802104530856,
+      "min_ms": 9.378958027809858,
+      "max_ms": 79.30541597306728
     }
   },
   {
@@ -423,8 +423,8 @@
     "index": {
       "files": 93362,
       "symbols": 3297692,
-      "seconds": 66.48,
-      "size": "1.0G"
+      "seconds": 26.47,
+      "size": "760M"
     },
     "search": {
       "greplm": "/Users/khaled/workspace/Github/greplm/target/release/greplm",
@@ -440,8 +440,8 @@
           "baseline_tokens": 438153.0,
           "greplm_tokens": 426.0,
           "saved_pct": 99.90277368864301,
-          "rg_ms": 1779.0654589771293,
-          "greplm_ms": 2959.4552500057034
+          "rg_ms": 1965.4744999716058,
+          "greplm_ms": 1542.8095419192687
         },
         {
           "id": "vfs-read",
@@ -452,8 +452,8 @@
           "baseline_tokens": 484101.25,
           "greplm_tokens": 573.0,
           "saved_pct": 99.88163633124269,
-          "rg_ms": 1644.7384579805657,
-          "greplm_ms": 2784.036833967548
+          "rg_ms": 1669.1376250237226,
+          "greplm_ms": 116.35658401064575
         },
         {
           "id": "kobject-init",
@@ -464,8 +464,8 @@
           "baseline_tokens": 1203748.25,
           "greplm_tokens": 1702.0,
           "saved_pct": 99.85860830950325,
-          "rg_ms": 2086.8519169744104,
-          "greplm_ms": 2718.703084043227
+          "rg_ms": 1852.0223749801517,
+          "greplm_ms": 112.93633293826133
         },
         {
           "id": "schedule-timeout",
@@ -476,8 +476,8 @@
           "baseline_tokens": 5717654.25,
           "greplm_tokens": 4570.0,
           "saved_pct": 99.92007211698748,
-          "rg_ms": 2120.0357080087997,
-          "greplm_ms": 2734.0853329515085
+          "rg_ms": 1601.4635829487815,
+          "greplm_ms": 167.3275000648573
         },
         {
           "id": "register-netdev",
@@ -488,8 +488,8 @@
           "baseline_tokens": 8080445.25,
           "greplm_tokens": 5676.75,
           "saved_pct": 99.92974706437123,
-          "rg_ms": 2299.560042039957,
-          "greplm_ms": 2680.0927920266986
+          "rg_ms": 1851.9755420275033,
+          "greplm_ms": 136.8650000076741
         },
         {
           "id": "dma-alloc-coherent",
@@ -500,8 +500,8 @@
           "baseline_tokens": 12766059.75,
           "greplm_tokens": 12750.0,
           "saved_pct": 99.90012580036687,
-          "rg_ms": 2301.3934579794295,
-          "greplm_ms": 2722.3638750147074
+          "rg_ms": 1950.0174169661477,
+          "greplm_ms": 159.67879199888557
         },
         {
           "id": "copy-to-user",
@@ -512,8 +512,8 @@
           "baseline_tokens": 10546973.75,
           "greplm_tokens": 16213.0,
           "saved_pct": 99.84627818003244,
-          "rg_ms": 2741.1534169805236,
-          "greplm_ms": 2801.1140839662403
+          "rg_ms": 1895.891624968499,
+          "greplm_ms": 150.12124995701015
         },
         {
           "id": "file-operations",
@@ -524,8 +524,8 @@
           "baseline_tokens": 12275907.75,
           "greplm_tokens": 20890.0,
           "saved_pct": 99.82982928492599,
-          "rg_ms": 2571.7347920290194,
-          "greplm_ms": 2985.7295000110753
+          "rg_ms": 1592.0042080106214,
+          "greplm_ms": 214.242875110358
         },
         {
           "id": "rcu-read-lock",
@@ -536,8 +536,8 @@
           "baseline_tokens": 22068367.25,
           "greplm_tokens": 10814.0,
           "saved_pct": 99.95099773409834,
-          "rg_ms": 2990.188625000883,
-          "greplm_ms": 2883.9180000359192
+          "rg_ms": 1866.6246249340475,
+          "greplm_ms": 151.66574995964766
         },
         {
           "id": "task-struct",
@@ -548,8 +548,8 @@
           "baseline_tokens": 10443135.5,
           "greplm_tokens": 20877.0,
           "saved_pct": 99.80008877601942,
-          "rg_ms": 2695.8315409719944,
-          "greplm_ms": 2849.366791022476
+          "rg_ms": 1772.581292083487,
+          "greplm_ms": 162.71075000986457
         }
       ],
       "summary": {
@@ -557,8 +557,8 @@
         "greplm_tokens": 94491.75,
         "saved_pct": 99.88754268306312,
         "mean_recall": 0.9987688204751357,
-        "greplm_ms": 2811.8865543045104,
-        "rg_ms": 2323.055341694271
+        "greplm_ms": 291.4714375976473,
+        "rg_ms": 1801.7192791914567
       }
     },
     "pack": {
@@ -568,59 +568,59 @@
         {
           "id": "scheduler-pick-next",
           "task": "how does the scheduler pick the next task to run",
-          "items": 43,
-          "files": 23,
-          "baseline_tokens": 552118.25,
-          "pack_tokens": 8014.25,
-          "saved_pct": 98.54845406758426
+          "items": 44,
+          "files": 24,
+          "baseline_tokens": 552358.75,
+          "pack_tokens": 8017.75,
+          "saved_pct": 98.54845243240919
         },
         {
           "id": "skb-alloc",
           "task": "how is a socket buffer sk_buff allocated and freed",
-          "items": 266,
+          "items": 269,
           "files": 49,
           "baseline_tokens": 593411.5,
-          "pack_tokens": 8102.5,
-          "saved_pct": 98.63458999362163
+          "pack_tokens": 8109.5,
+          "saved_pct": 98.6334103737457
         },
         {
           "id": "copy-to-user",
           "task": "how does copy_to_user safely move data to userspace",
-          "items": 71,
-          "files": 34,
-          "baseline_tokens": 391920.0,
-          "pack_tokens": 8023.5,
-          "saved_pct": 97.9527709736681
+          "items": 72,
+          "files": 35,
+          "baseline_tokens": 396416.5,
+          "pack_tokens": 8026.5,
+          "saved_pct": 97.97523564231055
         },
         {
           "id": "workqueue",
           "task": "how are workqueues created and work items scheduled",
-          "items": 111,
+          "items": 112,
           "files": 46,
-          "baseline_tokens": 637220.75,
-          "pack_tokens": 8035.25,
-          "saved_pct": 98.73901626712563
+          "baseline_tokens": 682608.25,
+          "pack_tokens": 8047.0,
+          "saved_pct": 98.82113935775023
         },
         {
           "id": "kmalloc",
           "task": "how does kmalloc allocate kernel memory from slab caches",
           "items": 42,
-          "files": 29,
-          "baseline_tokens": 328199.5,
-          "pack_tokens": 8017.0,
-          "saved_pct": 97.55727842364172
+          "files": 28,
+          "baseline_tokens": 322513.5,
+          "pack_tokens": 8014.25,
+          "saved_pct": 97.51506526083405
         }
       ],
       "summary": {
-        "baseline_tokens": 2502870.0,
-        "pack_tokens": 40192.5,
-        "saved_pct": 98.39414352323533
+        "baseline_tokens": 2547308.5,
+        "pack_tokens": 40215.0,
+        "saved_pct": 98.42127484754988
       }
     },
     "warm": {
-      "median_ms": 31.32629199535586,
-      "min_ms": 11.160125024616718,
-      "max_ms": 61.055666010361165
+      "median_ms": 18.812041496858,
+      "min_ms": 7.848958019167185,
+      "max_ms": 33.185499953106046
     }
   }
 ]

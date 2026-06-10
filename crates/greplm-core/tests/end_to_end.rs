@@ -166,9 +166,24 @@ fn schema_bump_triggers_automatic_rebuild() {
     );
 
     // The manifest should be back on the current supported schema version.
+    let meta = Meta::load(&paths.meta_file()).expect("rebuilt manifest should load cleanly");
+
+    // The rebuild couldn't read the old manifest, so it must reclaim stale
+    // segment files by sweeping the directory — otherwise every schema
+    // upgrade would leak the previous index on disk.
+    let live: Vec<u64> = meta.segments.clone();
+    let leaked: Vec<String> = std::fs::read_dir(paths.segments_dir())
+        .unwrap()
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_str()?.to_string();
+            let id: u64 = name.strip_prefix("seg-")?.split('.').next()?.parse().ok()?;
+            (!live.contains(&id)).then_some(name)
+        })
+        .collect();
     assert!(
-        Meta::load(&paths.meta_file()).is_ok(),
-        "rebuilt manifest should load cleanly"
+        leaked.is_empty(),
+        "schema-bump rebuild should sweep unreferenced segment files, leaked: {leaked:?}"
     );
 
     std::fs::remove_dir_all(&root).ok();
