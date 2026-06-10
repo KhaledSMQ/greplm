@@ -16,30 +16,56 @@ pub type TrigramGroup = Vec<Trigram>;
 /// when at least one group is fully present.
 pub type TrigramDnf = Vec<TrigramGroup>;
 
-fn key_of(w: &[u8]) -> u32 {
+pub(crate) fn key_of(w: &[u8]) -> u32 {
     (u32::from(w[0]) << 16) | (u32::from(w[1]) << 8) | u32::from(w[2])
 }
 
-fn tri_of(key: u32) -> Trigram {
+pub(crate) fn tri_of(key: u32) -> Trigram {
     [(key >> 16) as u8, (key >> 8) as u8, key as u8]
+}
+
+std::thread_local! {
+    /// A 2^24-bit membership set (2 MiB) used to deduplicate trigram keys
+    /// *during* the scan. Reused across calls on the same thread; after each
+    /// use the set bits are cleared by replaying the distinct-key list, so
+    /// reset costs O(distinct) instead of a 2 MiB memset per file.
+    static SEEN: std::cell::RefCell<Box<[u64]>> =
+        std::cell::RefCell::new(vec![0u64; 1 << 18].into_boxed_slice());
 }
 
 /// Extract the distinct trigrams present in `data`, sorted ascending.
 ///
-/// Each 3-byte window is encoded as a `u32` key, then the keys are
-/// sorted/deduped in one pass. This is dramatically cheaper than per-window
-/// tree insertion (the previous `BTreeSet` approach) and the big-endian
-/// encoding means the sorted order is exactly the lexicographic order the FST
-/// term dictionary requires.
+/// Each 3-byte window is encoded as a `u32` key and deduplicated on the fly
+/// against a thread-local bitset, so the scan is O(n) and the subsequent sort
+/// runs over *distinct* keys only (typically 10-50x fewer than windows for
+/// source code). This replaces sorting every window (O(n log n) with a
+/// transient allocation of 4 bytes per input byte). The big-endian encoding
+/// means the sorted order is exactly the lexicographic order the FST term
+/// dictionary requires.
 pub fn extract(data: &[u8]) -> Vec<Trigram> {
     if data.len() < 3 {
         return Vec::new();
     }
-    let mut keys: Vec<u32> = Vec::with_capacity(data.len() - 2);
-    keys.extend(data.windows(3).map(key_of));
-    keys.sort_unstable();
-    keys.dedup();
-    keys.into_iter().map(tri_of).collect()
+    SEEN.with(|seen| {
+        let mut seen = seen.borrow_mut();
+        let mut keys: Vec<u32> = Vec::new();
+        for w in data.windows(3) {
+            let k = key_of(w);
+            let word = (k >> 6) as usize;
+            let bit = 1u64 << (k & 63);
+            if seen[word] & bit == 0 {
+                seen[word] |= bit;
+                keys.push(k);
+            }
+        }
+        // Every set bit corresponds to exactly one pushed key, so zeroing each
+        // key's word clears the whole set (idempotent for keys sharing a word).
+        for &k in &keys {
+            seen[(k >> 6) as usize] = 0;
+        }
+        keys.sort_unstable();
+        keys.into_iter().map(tri_of).collect()
+    })
 }
 
 /// Extract the trigrams of a literal needle, sorted and deduplicated. Returns an

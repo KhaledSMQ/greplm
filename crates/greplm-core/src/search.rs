@@ -410,6 +410,13 @@ impl Searcher {
                 None => Segment::open(paths, seg_id)?,
             });
         }
+        // Honor deletes that are published in the manifest but not yet applied
+        // to the on-disk live bitmaps (the atomic-tombstone window).
+        for pt in &meta.pending_tombstones {
+            if let Some(seg) = segments.iter_mut().find(|s| s.id == pt.segment_id) {
+                seg.subtract_live(&pt.doc_ids);
+            }
+        }
         let by_path = build_path_index(&segments);
         let content = match prev {
             Some(p) => p.content.clone(),

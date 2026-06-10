@@ -14,7 +14,25 @@ use crate::error::{Error, Result};
 /// - v4 packs each posting list's cardinality into the FST value alongside its
 ///   offset, so query planning can intersect rarest-first without touching the
 ///   postings blob.
-pub const SCHEMA_VERSION: u32 = 4;
+/// - v5 adds an xxh3 checksum footer to every segment file and the
+///   `pending_tombstones` journal that makes incremental deletes atomic with
+///   the manifest swap.
+pub const SCHEMA_VERSION: u32 = 5;
+
+/// Tombstones that are published in the manifest but not yet applied to a
+/// segment's on-disk live bitmap.
+///
+/// An incremental update publishes its new delta segment *and* the doc ids it
+/// supersedes in a single atomic manifest write; the live bitmaps are only
+/// mutated afterwards. Readers subtract any pending tombstones from the live
+/// sets they load, and the next index operation applies and clears the journal
+/// (idempotently), so a crash between the publish and the bitmap writes can
+/// never surface deleted/stale documents nor lose the new ones.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingTombstones {
+    pub segment_id: u64,
+    pub doc_ids: Vec<u32>,
+}
 
 /// Index-wide manifest describing the set of live segments.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +55,12 @@ pub struct Meta {
     /// Git branch name at the time of indexing (empty if not a repo).
     #[serde(default)]
     pub indexed_branch: String,
+    /// Deletes published with the manifest but not yet applied to live
+    /// bitmaps (see [`PendingTombstones`]). Normally empty; non-empty only in
+    /// the window between an incremental publish and its bitmap writes (or
+    /// after a crash inside that window, until the next index op recovers).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_tombstones: Vec<PendingTombstones>,
 }
 
 impl Default for Meta {
@@ -50,6 +74,7 @@ impl Default for Meta {
             symbol_count: 0,
             indexed_git_head: String::new(),
             indexed_branch: String::new(),
+            pending_tombstones: Vec::new(),
         }
     }
 }

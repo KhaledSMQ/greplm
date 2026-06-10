@@ -14,11 +14,16 @@
 //! The FST and postings blob are mmap'd for zero-copy, page-cache-backed reads.
 //! Doc and symbol tables are small relative to content and loaded into memory.
 //!
+//! Every segment file carries an 8-byte xxh3 checksum footer, verified at open
+//! so silent corruption surfaces as [`Error::Corrupt`] (triggering the
+//! self-healing rebuild) instead of garbage results or a panic. The FST
+//! additionally has its own internal checksum.
+//!
 //! Everything except the live bitmap is immutable once written, so the loaded
 //! tables and derived lookup maps live in an [`Arc<SegmentData>`] that a
 //! reloading searcher can share instead of re-parsing (see [`Segment::reopen`]).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::io::BufWriter;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -159,7 +164,10 @@ pub struct SegmentWriter {
     docs: Vec<DocMeta>,
     syms: Vec<SymbolEntry>,
     refs: Vec<RefEntry>,
-    postings: BTreeMap<Trigram, RoaringBitmap>,
+    /// Flat postings pairs, `(trigram key << 32) | doc_id`, inverted by one
+    /// parallel sort at write time (Lucene-style sort-based inversion) instead
+    /// of millions of cache-hostile tree probes during the build.
+    pairs: Vec<u64>,
 }
 
 impl SegmentWriter {
@@ -191,9 +199,11 @@ impl SegmentWriter {
     ) -> u32 {
         let doc_id = self.docs.len() as u32;
         self.docs.push(meta);
-        for t in trigrams {
-            self.postings.entry(*t).or_default().insert(doc_id);
-        }
+        self.pairs.extend(
+            trigrams
+                .iter()
+                .map(|t| (u64::from(trigram::key_of(t)) << 32) | u64::from(doc_id)),
+        );
         for s in symbols {
             self.syms.push(SymbolEntry {
                 doc_id,
@@ -221,7 +231,7 @@ impl SegmentWriter {
     pub fn write(self, paths: &Paths, seg_id: u64) -> Result<()> {
         std::fs::create_dir_all(paths.segments_dir())
             .map_err(|e| Error::io(paths.segments_dir(), e))?;
-        let (post_blob, fst_entries) = build_postings_blob(self.postings)?;
+        let (post_blob, fst_entries) = build_postings_blob(self.pairs)?;
         write_segment_files(
             paths,
             seg_id,
@@ -229,24 +239,65 @@ impl SegmentWriter {
             &self.syms,
             &self.refs,
             &fst_entries,
-            &post_blob,
+            post_blob,
         )
     }
 }
 
+/// Append the 8-byte xxh3 checksum footer carried by every segment file.
+fn append_checksum(buf: &mut Vec<u8>) {
+    let h = xxhash_rust::xxh3::xxh3_64(buf);
+    buf.extend_from_slice(&h.to_le_bytes());
+}
+
+/// Verify a checksum footer and return the payload it covers.
+fn verify_checksum<'a>(bytes: &'a [u8], what: &str) -> Result<&'a [u8]> {
+    if bytes.len() < 8 {
+        return Err(Error::Corrupt(format!(
+            "{what}: too short for checksum footer"
+        )));
+    }
+    let (payload, footer) = bytes.split_at(bytes.len() - 8);
+    let want = u64::from_le_bytes(footer.try_into().expect("8-byte footer"));
+    if xxhash_rust::xxh3::xxh3_64(payload) != want {
+        return Err(Error::Corrupt(format!("{what}: checksum mismatch")));
+    }
+    Ok(payload)
+}
+
+/// Serialize and checksum a postcard side table.
+fn encode_table<T: Serialize>(rows: &[T]) -> Result<Vec<u8>> {
+    let mut buf = postcard::to_allocvec(rows)?;
+    append_checksum(&mut buf);
+    Ok(buf)
+}
+
+/// Read and decode a checksummed postcard side table.
+fn read_table<T: serde::de::DeserializeOwned>(
+    path: &std::path::Path,
+    what: &str,
+) -> Result<Vec<T>> {
+    let bytes = std::fs::read(path).map_err(|e| Error::io(path, e))?;
+    Ok(postcard::from_bytes(verify_checksum(&bytes, what)?)?)
+}
+
 /// Serialize the components of a segment to disk atomically. Shared by the
-/// incremental writer and by compaction's merge path.
-fn write_segment_files(
+/// incremental writer and by compaction's merge path. Takes the postings blob
+/// by value to append its checksum footer without copying.
+pub(crate) fn write_segment_files(
     paths: &Paths,
     seg_id: u64,
     docs: &[DocMeta],
     syms: &[SymbolEntry],
     refs: &[RefEntry],
     fst_entries: &[(Trigram, u64)],
-    post_blob: &[u8],
+    mut post_blob: Vec<u8>,
 ) -> Result<()> {
+    std::fs::create_dir_all(paths.segments_dir())
+        .map_err(|e| Error::io(paths.segments_dir(), e))?;
     // FST keys must be inserted in lexicographic order; callers pass entries
-    // sorted by trigram (BTreeMap iteration over [u8; 3] yields that order).
+    // sorted by trigram (sort-based inversion and the k-way merge both yield
+    // that order). The FST carries its own internal checksum.
     let fst_path = paths.fst_file(seg_id);
     let mut fst_out = AtomicFile::create(&fst_path)?;
     let mut builder = fst::MapBuilder::new(BufWriter::new(fst_out.file()))?;
@@ -256,13 +307,14 @@ fn write_segment_files(
     builder.finish()?;
     fst_out.commit()?;
 
-    write_atomic(&paths.post_file(seg_id), post_blob)?;
+    append_checksum(&mut post_blob);
+    write_atomic(&paths.post_file(seg_id), &post_blob)?;
     // Side tables use postcard (compact binary) rather than JSON: on large trees
     // these dominate on-disk size and cold-start parse time. The hot path (FST +
     // roaring + mmap) is unaffected.
-    write_atomic(&paths.docs_file(seg_id), &postcard::to_allocvec(docs)?)?;
-    write_atomic(&paths.syms_file(seg_id), &postcard::to_allocvec(syms)?)?;
-    write_atomic(&paths.refs_file(seg_id), &postcard::to_allocvec(refs)?)?;
+    write_atomic(&paths.docs_file(seg_id), &encode_table(docs)?)?;
+    write_atomic(&paths.syms_file(seg_id), &encode_table(syms)?)?;
+    write_atomic(&paths.refs_file(seg_id), &encode_table(refs)?)?;
 
     // Initially every doc is live.
     let mut live = RoaringBitmap::new();
@@ -274,36 +326,82 @@ fn write_segment_files(
 
 /// A serialized postings blob paired with the (trigram, packed value) entries
 /// that index into it for the FST.
-type PostingsBlob = (Vec<u8>, Vec<(Trigram, u64)>);
+pub(crate) type PostingsBlob = (Vec<u8>, Vec<(Trigram, u64)>);
 
 /// Build the postings blob and the (trigram, packed offset+cardinality) FST
-/// entries from an in-memory posting map.
-fn build_postings_blob(postings: BTreeMap<Trigram, RoaringBitmap>) -> Result<PostingsBlob> {
+/// entries from flat `(trigram key << 32) | doc_id` pairs: one parallel sort,
+/// then a single linear pass that streams each run straight into the blob.
+fn build_postings_blob(mut pairs: Vec<u64>) -> Result<PostingsBlob> {
+    use rayon::prelude::*;
+    pairs.par_sort_unstable();
     let mut post_blob: Vec<u8> = Vec::new();
-    let mut fst_entries: Vec<(Trigram, u64)> = Vec::with_capacity(postings.len());
-    for (tri, mut bm) in postings.into_iter() {
+    let mut fst_entries: Vec<(Trigram, u64)> = Vec::new();
+    let mut i = 0usize;
+    while i < pairs.len() {
+        let key = (pairs[i] >> 32) as u32;
+        let start = i;
+        while i < pairs.len() && (pairs[i] >> 32) as u32 == key {
+            i += 1;
+        }
+        // Within a run, doc ids are strictly ascending: the run is a sorted
+        // u64 range sharing its high 32 bits, and each doc contributes a
+        // trigram at most once (extract() yields distinct trigrams).
+        let mut bm =
+            RoaringBitmap::from_sorted_iter(pairs[start..i].iter().map(|&p| p as u32))
+                .map_err(|e| Error::other(format!("postings pairs not sorted: {e}")))?;
         bm.optimize();
         let offset = post_blob.len() as u64;
         bm.serialize_into(&mut post_blob)
             .map_err(|e| Error::other(format!("roaring serialize: {e}")))?;
-        fst_entries.push((tri, pack_entry(offset, bm.len())?));
+        fst_entries.push((trigram::tri_of(key), pack_entry(offset, bm.len())?));
     }
     Ok((post_blob, fst_entries))
 }
 
-/// Write a segment directly from prebuilt parts (used by compaction).
-pub(crate) fn write_segment_from_parts(
-    paths: &Paths,
-    seg_id: u64,
-    docs: &[DocMeta],
-    syms: &[SymbolEntry],
-    refs: &[RefEntry],
-    postings: BTreeMap<Trigram, RoaringBitmap>,
-) -> Result<()> {
-    std::fs::create_dir_all(paths.segments_dir())
-        .map_err(|e| Error::io(paths.segments_dir(), e))?;
-    let (post_blob, fst_entries) = build_postings_blob(postings)?;
-    write_segment_files(paths, seg_id, docs, syms, refs, &fst_entries, &post_blob)
+/// Stream-merge the postings of several segments into one blob, remapping doc
+/// ids via `remaps` (one table per segment, indexed by old doc id; `u32::MAX`
+/// marks a dropped/tombstoned doc).
+///
+/// A k-way union over the segments' FST term dictionaries visits trigrams in
+/// lexicographic order, so memory stays at O(segments) plus a single output
+/// posting list — the merged index's postings are never materialized at once.
+pub(crate) fn merge_postings(segments: &[Segment], remaps: &[Vec<u32>]) -> Result<PostingsBlob> {
+    use fst::Streamer;
+    let mut op = fst::map::OpBuilder::new();
+    for seg in segments {
+        op.push(seg.data.fst.stream());
+    }
+    let mut union = op.union();
+    let mut post_blob: Vec<u8> = Vec::new();
+    let mut fst_entries: Vec<(Trigram, u64)> = Vec::new();
+    while let Some((key, vals)) = union.next() {
+        if key.len() != 3 {
+            continue;
+        }
+        let tri: Trigram = [key[0], key[1], key[2]];
+        let mut out = RoaringBitmap::new();
+        for iv in vals {
+            let seg = &segments[iv.index];
+            let remap = &remaps[iv.index];
+            let bm = seg.data.posting_at(unpack_offset(iv.value))?;
+            for old in bm {
+                if let Some(&new_id) = remap.get(old as usize) {
+                    if new_id != u32::MAX {
+                        out.insert(new_id);
+                    }
+                }
+            }
+        }
+        if out.is_empty() {
+            continue;
+        }
+        out.optimize();
+        let offset = post_blob.len() as u64;
+        out.serialize_into(&mut post_blob)
+            .map_err(|e| Error::other(format!("roaring serialize: {e}")))?;
+        fst_entries.push((tri, pack_entry(offset, out.len())?));
+    }
+    Ok((post_blob, fst_entries))
 }
 
 // ---------------------------------------------------------------------------
@@ -317,6 +415,9 @@ pub(crate) fn write_segment_from_parts(
 pub struct SegmentData {
     fst: fst::Map<Mmap>,
     post: Mmap,
+    /// Logical length of the postings blob (the mmap minus its checksum
+    /// footer); posting offsets must never slice past this.
+    post_len: usize,
     pub docs: Vec<DocMeta>,
     pub syms: Vec<SymbolEntry>,
     pub refs: Vec<RefEntry>,
@@ -377,22 +478,19 @@ impl Segment {
         let post_path = paths.post_file(seg_id);
         let post_file = std::fs::File::open(&post_path).map_err(|e| Error::io(&post_path, e))?;
         let post = unsafe { Mmap::map(&post_file).map_err(|e| Error::io(&post_path, e))? };
+        // Verify the blob's checksum footer up front (one sequential pass, same
+        // policy as the FST verification above) so a flipped bit surfaces as
+        // `Corrupt` at open instead of a wrong or undecodable posting later.
+        let post_len = verify_checksum(&post, "postings blob")?.len();
 
-        let docs_path = paths.docs_file(seg_id);
-        let docs: Vec<DocMeta> = postcard::from_bytes(
-            &std::fs::read(&docs_path).map_err(|e| Error::io(&docs_path, e))?,
-        )?;
-
-        let syms_path = paths.syms_file(seg_id);
-        let syms: Vec<SymbolEntry> = postcard::from_bytes(
-            &std::fs::read(&syms_path).map_err(|e| Error::io(&syms_path, e))?,
-        )?;
+        let docs: Vec<DocMeta> = read_table(&paths.docs_file(seg_id), "docs table")?;
+        let syms: Vec<SymbolEntry> = read_table(&paths.syms_file(seg_id), "symbol table")?;
 
         // Tolerate a missing refs file (treat as no refs) so a segment written
         // without any references can still be opened read-only.
         let refs_path = paths.refs_file(seg_id);
         let refs: Vec<RefEntry> = match std::fs::read(&refs_path) {
-            Ok(bytes) => postcard::from_bytes(&bytes)?,
+            Ok(bytes) => postcard::from_bytes(verify_checksum(&bytes, "refs table")?)?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(e) => return Err(Error::io(&refs_path, e)),
         };
@@ -425,6 +523,7 @@ impl Segment {
             data: Arc::new(SegmentData {
                 fst,
                 post,
+                post_len,
                 docs,
                 syms,
                 refs,
@@ -454,6 +553,16 @@ impl Segment {
 
     pub fn is_live(&self, doc_id: u32) -> bool {
         self.live.contains(doc_id)
+    }
+
+    /// Subtract pending tombstones from this open's live snapshot. Readers use
+    /// this to honor deletes that are already published in the manifest but
+    /// not yet applied to the on-disk live bitmap (see
+    /// [`crate::meta::Meta::pending_tombstones`]).
+    pub fn subtract_live(&mut self, doc_ids: &[u32]) {
+        for &id in doc_ids {
+            self.live.remove(id);
+        }
     }
 
     pub fn live_count(&self) -> u64 {
@@ -567,39 +676,14 @@ impl SegmentData {
     /// path rebuild) instead of panicking with an out-of-range slice index.
     fn posting_at(&self, offset: u64) -> Result<RoaringBitmap> {
         let start = offset as usize;
-        let slice = self.post.get(start..).ok_or_else(|| {
+        let slice = self.post.get(start..self.post_len).ok_or_else(|| {
             Error::Corrupt(format!(
                 "posting offset {start} out of range for postings blob of length {}",
-                self.post.len()
+                self.post_len
             ))
         })?;
         RoaringBitmap::deserialize_from(slice)
             .map_err(|e| Error::Corrupt(format!("posting list: {e}")))
-    }
-
-    /// Add this segment's postings to `out`, remapping doc ids via `remap` and
-    /// dropping any doc not present in the map (i.e. tombstoned/non-live).
-    pub(crate) fn remap_postings(
-        &self,
-        remap: &HashMap<u32, u32>,
-        out: &mut BTreeMap<Trigram, RoaringBitmap>,
-    ) -> Result<()> {
-        use fst::Streamer;
-        let mut stream = self.fst.stream();
-        while let Some((key, value)) = stream.next() {
-            if key.len() != 3 {
-                continue;
-            }
-            let tri: Trigram = [key[0], key[1], key[2]];
-            let bm = self.posting_at(unpack_offset(value))?;
-            let dest = out.entry(tri).or_default();
-            for old in bm.iter() {
-                if let Some(&new_id) = remap.get(&old) {
-                    dest.insert(new_id);
-                }
-            }
-        }
-        Ok(())
     }
 
     /// OR together the AND-groups of one DNF.
@@ -678,14 +762,15 @@ fn build_doc_index(n: usize, doc_ids: impl Iterator<Item = u32> + Clone) -> (Vec
 }
 
 pub(crate) fn write_bitmap(path: &std::path::Path, bm: &RoaringBitmap) -> Result<()> {
-    let mut buf = Vec::with_capacity(bm.serialized_size());
+    let mut buf = Vec::with_capacity(bm.serialized_size() + 8);
     bm.serialize_into(&mut buf)
         .map_err(|e| Error::other(format!("roaring serialize: {e}")))?;
+    append_checksum(&mut buf);
     write_atomic(path, &buf)
 }
 
 pub(crate) fn read_bitmap(path: &std::path::Path) -> Result<RoaringBitmap> {
     let bytes = std::fs::read(path).map_err(|e| Error::io(path, e))?;
-    RoaringBitmap::deserialize_from(&bytes[..])
+    RoaringBitmap::deserialize_from(verify_checksum(&bytes, "live bitmap")?)
         .map_err(|e| Error::Corrupt(format!("live bitmap: {e}")))
 }

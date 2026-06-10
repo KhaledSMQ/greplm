@@ -1,22 +1,21 @@
 //! Index construction: full builds, hash-gated incremental updates, compaction.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{HashMap, HashSet};
 
 use rayon::prelude::*;
-use roaring::RoaringBitmap;
 
 use crate::cache::{fast_hash, stat_key, Cache, FileRecord};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::io_backend::IoBackend;
 use crate::lang::Language;
-use crate::meta::Meta;
+use crate::meta::{Meta, PendingTombstones};
 use crate::paths::Paths;
 use crate::segment::{
-    read_bitmap, write_bitmap, write_segment_from_parts, DocMeta, RawRef, RawSymbol, RefEntry,
-    Segment, SegmentWriter, SymbolEntry,
+    merge_postings, read_bitmap, write_bitmap, write_segment_files, DocMeta, RawRef, RawSymbol,
+    RefEntry, Segment, SegmentWriter, SymbolEntry,
 };
-use crate::trigram::{self, Trigram};
+use crate::trigram;
 use crate::walk::{self, SkipReason, Skipped, WalkEntry};
 
 /// How many skipped-file paths to retain for display. Counts in
@@ -86,7 +85,22 @@ struct Processed {
     trigrams: Vec<trigram::Trigram>,
     symbols: Vec<RawSymbol>,
     refs: Vec<RawRef>,
+    /// Set when this file's content is byte-identical to a doc being deleted
+    /// this run (a rename/move): `(segment_id, doc_id)` of the old doc, whose
+    /// symbols/refs are copied instead of re-running tree-sitter.
+    rename_from: Option<(u64, u32)>,
 }
+
+/// A rename-source doc: where the old copy lives plus its language, so the
+/// fast path only fires when the parse result would be identical.
+struct RenameSrc {
+    segment_id: u64,
+    doc_id: u32,
+    lang: String,
+}
+
+/// Rename sources keyed by `(content hash, size)` of the deleted file.
+type RenameSources = HashMap<(u64, u64), RenameSrc>;
 
 /// Detect binary content: any NUL byte anywhere in the file.
 fn is_binary(data: &[u8]) -> bool {
@@ -110,19 +124,30 @@ fn count_lines(data: &[u8]) -> u32 {
 enum Outcome {
     /// File was read and prepared for indexing.
     Indexed(Box<Processed>),
-    /// File was skipped (binary or unreadable); carries the reason.
-    Skipped(SkipReason),
+    /// File was skipped (binary or unreadable); carries the path and reason.
+    Skipped(Skipped),
 }
 
-fn process(entry: &WalkEntry, backend: &dyn IoBackend, config: &Config) -> Outcome {
+fn process(
+    entry: &WalkEntry,
+    backend: &dyn IoBackend,
+    config: &Config,
+    renames: &RenameSources,
+) -> Outcome {
+    let skip = |reason| {
+        Outcome::Skipped(Skipped {
+            rel: entry.rel.clone(),
+            reason,
+        })
+    };
     let data = match backend.read(&entry.path) {
         Ok(d) => d,
         // A read failure (permissions, vanished mid-walk) is a skip, not a hard
         // error — record it so it's visible rather than silently dropped.
-        Err(_) => return Outcome::Skipped(SkipReason::ReadError),
+        Err(_) => return skip(SkipReason::ReadError),
     };
     if !config.index_binary && is_binary(&data) {
-        return Outcome::Skipped(SkipReason::Binary);
+        return skip(SkipReason::Binary);
     }
     let ext = entry
         .path
@@ -134,7 +159,14 @@ fn process(entry: &WalkEntry, backend: &dyn IoBackend, config: &Config) -> Outco
     let (inode, mtime_ns, size) = stat_key(&entry.metadata);
     let hash = fast_hash(&data);
     let trigrams = trigram::extract(&data);
-    let (symbols, refs) = if lang.grammar().is_some() {
+    // Rename fast path: identical content to a doc deleted this run, in the
+    // same language, means an identical parse — skip tree-sitter and let the
+    // caller copy the old doc's symbols/refs.
+    let rename_from = renames
+        .get(&(hash, size))
+        .filter(|src| src.lang == lang.id())
+        .map(|src| (src.segment_id, src.doc_id));
+    let (symbols, refs) = if rename_from.is_none() && lang.grammar().is_some() {
         crate::symbol::extract_all(lang, &data)
     } else {
         (Vec::new(), Vec::new())
@@ -156,6 +188,7 @@ fn process(entry: &WalkEntry, backend: &dyn IoBackend, config: &Config) -> Outco
         trigrams,
         symbols,
         refs,
+        rename_from,
     }))
 }
 
@@ -165,17 +198,18 @@ fn process_all(
     candidates: &[&WalkEntry],
     backend: &dyn IoBackend,
     config: &Config,
+    renames: &RenameSources,
 ) -> (Vec<Processed>, Vec<Skipped>) {
-    let outcomes: Vec<(String, Outcome)> = candidates
+    let outcomes: Vec<Outcome> = candidates
         .par_iter()
-        .map(|e| (e.rel.clone(), process(e, backend, config)))
+        .map(|e| process(e, backend, config, renames))
         .collect();
     let mut processed = Vec::with_capacity(outcomes.len());
     let mut skipped = Vec::new();
-    for (rel, outcome) in outcomes {
+    for outcome in outcomes {
         match outcome {
             Outcome::Indexed(p) => processed.push(*p),
-            Outcome::Skipped(reason) => skipped.push(Skipped { rel, reason }),
+            Outcome::Skipped(s) => skipped.push(s),
         }
     }
     (processed, skipped)
@@ -226,6 +260,9 @@ impl<'a> Indexer<'a> {
             Err(e) => return Err(e),
         };
         let old_segments = std::mem::take(&mut meta.segments);
+        // A full rebuild replaces every segment, so any unapplied tombstone
+        // journal is moot.
+        meta.pending_tombstones.clear();
 
         let cache = Cache::open(&self.paths.cache_file())?;
 
@@ -234,7 +271,8 @@ impl<'a> Indexer<'a> {
             skipped: walk_skips,
         } = walk::walk(self.paths, self.config)?;
         let candidates: Vec<&WalkEntry> = entries.iter().collect();
-        let (processed, proc_skips) = process_all(&candidates, self.backend, self.config);
+        let (processed, proc_skips) =
+            process_all(&candidates, self.backend, self.config, &RenameSources::new());
 
         let seg_id = meta.alloc_segment();
         let mut writer = SegmentWriter::new();
@@ -312,6 +350,11 @@ impl<'a> Indexer<'a> {
         if meta.segments.is_empty() {
             return self.index_full();
         }
+
+        // Recovery: apply any tombstones a previous run published in the
+        // manifest but didn't get to write into the live bitmaps.
+        self.apply_pending_tombstones(&mut meta)?;
+
         let cache = Cache::open(&self.paths.cache_file())?;
         let existing = cache.load_all()?;
 
@@ -321,7 +364,7 @@ impl<'a> Indexer<'a> {
         // refreshing the cache), trusting the cache could tombstone the wrong
         // segment and leave duplicate or orphaned docs. The cache is rebuildable,
         // so degrade to a full rebuild instead.
-        let live_segs: std::collections::HashSet<u64> = meta.segments.iter().copied().collect();
+        let live_segs: HashSet<u64> = meta.segments.iter().copied().collect();
         if existing
             .values()
             .any(|r| !live_segs.contains(&r.segment_id))
@@ -332,6 +375,23 @@ impl<'a> Indexer<'a> {
             return self.index_full();
         }
 
+        // Reverse guard: a manifest segment holding live docs that no cache
+        // record references means a previous run published a delta segment but
+        // crashed before its cache update landed. Trusting the cache would
+        // re-index those files into duplicates, so degrade to a full rebuild.
+        // (A fully tombstoned segment legitimately has no cache references and
+        // is skipped by the liveness check.)
+        let referenced: HashSet<u64> = existing.values().map(|r| r.segment_id).collect();
+        for &seg_id in &meta.segments {
+            if !referenced.contains(&seg_id)
+                && read_bitmap(&self.paths.live_file(seg_id)).is_ok_and(|bm| !bm.is_empty())
+            {
+                drop(existing);
+                drop(cache);
+                return self.index_full();
+            }
+        }
+
         let walk::WalkResult {
             entries,
             skipped: walk_skips,
@@ -340,6 +400,16 @@ impl<'a> Indexer<'a> {
         for e in &entries {
             seen.insert(e.rel.clone(), e);
         }
+
+        // Deleted files: in the cache but no longer on disk. Computed before
+        // the read/parse stage so identical-content renames can be detected
+        // there and skip re-parsing.
+        let deleted: Vec<String> = existing
+            .keys()
+            .filter(|p| !seen.contains_key(*p))
+            .cloned()
+            .collect();
+        let (renames, rename_segs) = self.rename_sources(&existing, &deleted);
 
         // Decide which entries need (re)processing using a cheap stat pre-check.
         let candidates: Vec<&WalkEntry> = entries
@@ -353,12 +423,39 @@ impl<'a> Indexer<'a> {
             })
             .collect();
 
-        let (processed, proc_skips) = process_all(&candidates, self.backend, self.config);
+        let (processed, proc_skips) = process_all(&candidates, self.backend, self.config, &renames);
 
         // Keep only entries whose content hash actually changed.
         let mut changed: Vec<Processed> = Vec::new();
         let mut touch_only: Vec<(String, FileRecord)> = Vec::new();
-        for pf in processed {
+        for mut pf in processed {
+            // Rename fast path: the parse stage skipped tree-sitter because
+            // this content is identical to a doc deleted this run; copy that
+            // doc's symbols/refs instead.
+            if let Some((src_seg, src_doc)) = pf.rename_from {
+                if let Some(seg) = rename_segs.get(&src_seg) {
+                    pf.symbols = seg
+                        .doc_syms(src_doc)
+                        .map(|s| RawSymbol {
+                            name: s.name.clone(),
+                            kind: s.kind.clone(),
+                            line_start: s.line_start,
+                            line_end: s.line_end,
+                            container: s.container.clone(),
+                            signature: s.signature.clone(),
+                        })
+                        .collect();
+                    pf.refs = seg
+                        .doc_refs(src_doc)
+                        .map(|r| RawRef {
+                            name: r.name.clone(),
+                            kind: r.kind,
+                            line: r.line,
+                            column: r.column,
+                        })
+                        .collect();
+                }
+            }
             match existing.get(&pf.rel) {
                 Some(rec) if rec.hash == pf.hash => {
                     // Content identical; just refresh the stat key.
@@ -379,14 +476,9 @@ impl<'a> Indexer<'a> {
             }
         }
 
-        // Deleted files: in the cache but no longer on disk.
-        let deleted: Vec<String> = existing
-            .keys()
-            .filter(|p| !seen.contains_key(*p))
-            .cloned()
-            .collect();
-
-        // Tombstone old docs for changed and deleted files.
+        // Collect the docs superseded by changed and deleted files. These are
+        // *not* applied yet: they are published in the manifest first (see
+        // below) so adds and deletes land atomically.
         let mut tombstones: HashMap<u64, Vec<u32>> = HashMap::new();
         for pf in &changed {
             if let Some(rec) = existing.get(&pf.rel) {
@@ -403,9 +495,6 @@ impl<'a> Indexer<'a> {
                     .or_default()
                     .push(rec.doc_id);
             }
-        }
-        for (seg_id, doc_ids) in &tombstones {
-            self.tombstone(*seg_id, doc_ids)?;
         }
 
         // Maintain index-wide counts incrementally. Each live document maps to
@@ -463,7 +552,37 @@ impl<'a> Indexer<'a> {
             meta.segments.push(seg_id);
         }
 
+        // Atomic publish: the new delta segment *and* the doc ids it
+        // supersedes land in one manifest write. Readers subtract pending
+        // tombstones from the live sets they load, so the index flips from
+        // old state to new state at this single rename — a crash on either
+        // side never surfaces stale docs alongside their replacements.
+        meta.pending_tombstones = tombstones
+            .iter()
+            .map(|(&segment_id, doc_ids)| PendingTombstones {
+                segment_id,
+                doc_ids: doc_ids.clone(),
+            })
+            .collect();
+        meta.doc_count = doc_count.max(0) as u64;
+        meta.symbol_count = sym_count.max(0) as u64;
+        meta.record_git_head(&self.paths.root);
+        meta.touch_now();
+        meta.save(&self.paths.meta_file())?;
+
+        // Now apply the published tombstones to the live bitmaps, refresh the
+        // cache, and clear the journal. A crash anywhere in between is
+        // recovered on the next run: `apply_pending_tombstones` replays the
+        // journal (idempotently) and the consistency guards catch a cache that
+        // never learned about the new segment.
+        for (seg_id, doc_ids) in &tombstones {
+            self.tombstone(*seg_id, doc_ids)?;
+        }
         cache.apply(&upserts, &deleted)?;
+        if !meta.pending_tombstones.is_empty() {
+            meta.pending_tombstones.clear();
+            meta.save(&self.paths.meta_file())?;
+        }
 
         let mut stats = IndexStats {
             files_indexed: changed_count,
@@ -475,24 +594,84 @@ impl<'a> Indexer<'a> {
         stats.record_skips(walk_skips);
         stats.record_skips(proc_skips);
 
-        meta.doc_count = doc_count.max(0) as u64;
-        meta.symbol_count = sym_count.max(0) as u64;
-        meta.record_git_head(&self.paths.root);
-        meta.touch_now();
-        meta.save(&self.paths.meta_file())?;
-
-        // Auto-compact if we've accumulated too many segments.
+        // Auto-compact if we've accumulated too many segments. Release the
+        // cache handle first: redb allows only one open handle per process,
+        // and the merge opens its own.
         if meta.segments.len() > self.config.merge_threshold {
-            self.compact()?;
+            drop(cache);
+            self.compact_auto()?;
         }
         Ok(stats)
+    }
+
+    /// Apply (and clear) any tombstones that are published in the manifest but
+    /// not yet written into the per-segment live bitmaps — the recovery half
+    /// of the atomic-delete protocol. Idempotent: removing an already-dead doc
+    /// id is a no-op, so replaying after a crash is safe. The journal is only
+    /// cleared from disk after every bitmap write succeeded.
+    fn apply_pending_tombstones(&self, meta: &mut Meta) -> Result<()> {
+        if meta.pending_tombstones.is_empty() {
+            return Ok(());
+        }
+        let pending = std::mem::take(&mut meta.pending_tombstones);
+        for pt in &pending {
+            // The segment may have been dropped by a later operation.
+            if meta.segments.contains(&pt.segment_id) {
+                self.tombstone(pt.segment_id, &pt.doc_ids)?;
+            }
+        }
+        meta.save(&self.paths.meta_file())
+    }
+
+    /// Build the rename-source table for this run: for every file that
+    /// disappeared from disk, map its `(content hash, size)` to the old doc so
+    /// a new path with byte-identical content (a rename/move) can copy the old
+    /// doc's symbols and refs instead of re-running tree-sitter. Each source
+    /// segment is opened once; an unopenable segment just disables the fast
+    /// path for its docs (the slow path re-parses).
+    fn rename_sources(
+        &self,
+        existing: &HashMap<String, FileRecord>,
+        deleted: &[String],
+    ) -> (RenameSources, HashMap<u64, Segment>) {
+        let mut wanted: HashMap<u64, Vec<&FileRecord>> = HashMap::new();
+        for path in deleted {
+            if let Some(rec) = existing.get(path) {
+                wanted.entry(rec.segment_id).or_default().push(rec);
+            }
+        }
+        let mut renames = RenameSources::new();
+        let mut segs: HashMap<u64, Segment> = HashMap::new();
+        for (seg_id, recs) in wanted {
+            let seg = match Segment::open(self.paths, seg_id) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::debug!("rename fast-path disabled for segment {seg_id}: {e}");
+                    continue;
+                }
+            };
+            for rec in recs {
+                if let Some(doc) = seg.doc(rec.doc_id) {
+                    renames.insert(
+                        (rec.hash, rec.size),
+                        RenameSrc {
+                            segment_id: seg_id,
+                            doc_id: rec.doc_id,
+                            lang: doc.lang.clone(),
+                        },
+                    );
+                }
+            }
+            segs.insert(seg_id, seg);
+        }
+        (renames, segs)
     }
 
     /// Merge all live documents from every segment into a single compact
     /// segment. This reuses the already-indexed postings/symbols (no file reads,
     /// no re-parsing) and falls back to a full rebuild if anything goes wrong.
     pub fn compact(&self) -> Result<IndexStats> {
-        match self.merge_segments() {
+        match self.merge_segments(true) {
             Ok(stats) => Ok(stats),
             Err(e) => {
                 tracing::warn!("merge compaction failed ({e}); falling back to full rebuild");
@@ -501,17 +680,60 @@ impl<'a> Indexer<'a> {
         }
     }
 
-    /// Core of [`compact`]: a true k-way merge over existing segments.
-    fn merge_segments(&self) -> Result<IndexStats> {
+    /// Auto-compaction (tiered): merge only the *smallest* segments — by live
+    /// doc count — down to half the merge threshold, leaving the large ones
+    /// untouched. Compared to rewriting the whole index on every threshold
+    /// crossing, each doc is rewritten O(log n) times over the index's life
+    /// instead of O(n / threshold).
+    fn compact_auto(&self) -> Result<IndexStats> {
+        match self.merge_segments(false) {
+            Ok(stats) => Ok(stats),
+            Err(e) => {
+                tracing::warn!("auto compaction failed ({e}); falling back to full rebuild");
+                self.index_full()
+            }
+        }
+    }
+
+    /// Core of [`compact`] / [`Self::compact_auto`]: a streaming k-way merge
+    /// over the chosen segments. Doc/symbol/ref tables are concatenated with
+    /// remapped ids; postings are merged by a union over the segments' FST
+    /// term dictionaries, so the merged index's posting lists are never all
+    /// resident at once.
+    fn merge_segments(&self, all: bool) -> Result<IndexStats> {
         let mut meta = Meta::load(&self.paths.meta_file())?;
         if meta.segments.is_empty() {
             return Ok(IndexStats::default());
         }
+        // Live bitmaps are about to be read; make sure published-but-unapplied
+        // deletes are honored first.
+        self.apply_pending_tombstones(&mut meta)?;
+
         let cache = Cache::open(&self.paths.cache_file())?;
         let existing = cache.load_all()?;
 
-        let segments: Vec<Segment> = meta
-            .segments
+        // Victim selection: everything for an explicit compact; otherwise the
+        // smallest segments, leaving `target` slots for the survivors plus the
+        // merged output.
+        let victim_ids: Vec<u64> = if all {
+            meta.segments.clone()
+        } else {
+            let target = (self.config.merge_threshold / 2).max(1);
+            if meta.segments.len() <= target {
+                return Ok(IndexStats::default());
+            }
+            let mut by_live: Vec<(u64, u64)> = meta
+                .segments
+                .iter()
+                .map(|&id| Ok((id, read_bitmap(&self.paths.live_file(id))?.len())))
+                .collect::<Result<_>>()?;
+            by_live.sort_by_key(|&(_, n)| n);
+            by_live.truncate(meta.segments.len() - target + 1);
+            by_live.into_iter().map(|(id, _)| id).collect()
+        };
+        let victims: HashSet<u64> = victim_ids.iter().copied().collect();
+
+        let segments: Vec<Segment> = victim_ids
             .iter()
             .map(|&id| Segment::open(self.paths, id))
             .collect::<Result<_>>()?;
@@ -519,19 +741,20 @@ impl<'a> Indexer<'a> {
         let mut docs: Vec<DocMeta> = Vec::new();
         let mut syms: Vec<SymbolEntry> = Vec::new();
         let mut refs: Vec<RefEntry> = Vec::new();
-        let mut postings: BTreeMap<Trigram, RoaringBitmap> = BTreeMap::new();
+        let mut remaps: Vec<Vec<u32>> = Vec::with_capacity(segments.len());
         let mut upserts: Vec<(String, FileRecord)> = Vec::new();
         let new_seg_id = meta.alloc_segment();
 
         for seg in &segments {
-            let mut remap: HashMap<u32, u32> = HashMap::new();
+            // Old doc id -> new doc id; `u32::MAX` marks tombstoned docs.
+            let mut remap: Vec<u32> = vec![u32::MAX; seg.docs.len()];
             for old_id in seg.all_live().iter() {
                 let doc = match seg.doc(old_id) {
                     Some(d) => d,
                     None => continue,
                 };
                 let new_id = docs.len() as u32;
-                remap.insert(old_id, new_id);
+                remap[old_id as usize] = new_id;
                 let syms_before = syms.len();
                 for s in seg.doc_syms(old_id) {
                     syms.push(SymbolEntry {
@@ -572,30 +795,49 @@ impl<'a> Indexer<'a> {
                 ));
                 docs.push(doc.clone());
             }
-            seg.remap_postings(&remap, &mut postings)?;
+            remaps.push(remap);
         }
 
-        let old_segments = std::mem::take(&mut meta.segments);
+        // Streaming postings merge: O(victims) state plus one output list.
+        let (post_blob, fst_entries) = merge_postings(&segments, &remaps)?;
+        drop(segments);
+
         let symbol_count = syms.len();
         let doc_count = docs.len();
 
-        if docs.is_empty() {
-            meta.segments = Vec::new();
-        } else {
-            write_segment_from_parts(self.paths, new_seg_id, &docs, &syms, &refs, postings)?;
-            meta.segments = vec![new_seg_id];
+        meta.segments.retain(|id| !victims.contains(id));
+        if !docs.is_empty() {
+            write_segment_files(
+                self.paths,
+                new_seg_id,
+                &docs,
+                &syms,
+                &refs,
+                &fst_entries,
+                post_blob,
+            )?;
+            meta.segments.push(new_seg_id);
         }
 
         // Publish the new manifest first so searches always see a consistent
         // index, then refresh the cache and reclaim the old segment files.
-        meta.doc_count = doc_count as u64;
-        meta.symbol_count = symbol_count as u64;
+        if all {
+            // A full merge sees every live doc, so the totals are exact.
+            meta.doc_count = doc_count as u64;
+            meta.symbol_count = symbol_count as u64;
+        }
         meta.touch_now();
         meta.save(&self.paths.meta_file())?;
 
-        cache.replace_all(&upserts)?;
+        if all {
+            cache.replace_all(&upserts)?;
+        } else {
+            // Survivor segments keep their cache records; only merged docs
+            // move.
+            cache.apply(&upserts, &[])?;
+        }
 
-        for id in old_segments {
+        for id in victim_ids {
             self.remove_segment_files(id);
         }
 

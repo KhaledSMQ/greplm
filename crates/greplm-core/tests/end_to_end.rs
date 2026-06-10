@@ -656,23 +656,19 @@ fn corrupt_postings_blob_errors_cleanly_and_falls_back() {
     let g = Greplm::open(&root).unwrap();
     g.index(true).unwrap();
 
-    // Truncate the postings blob to a single byte: the FST term dictionary's
-    // offsets now point past its end, exercising the decode bounds check.
+    // Truncate the postings blob to a single byte: its checksum footer is gone
+    // and the FST term dictionary's offsets point past its end.
     let paths = Paths::new(&root);
     let meta = Meta::load(&paths.meta_file()).unwrap();
     let seg = *meta.segments.first().expect("one segment");
     std::fs::write(paths.post_file(seg), b"\x00").unwrap();
 
-    // The segment still opens (its other tables are intact), but querying a
-    // trigram that exists in the corpus must return an error, not panic.
-    let searcher = g.searcher().unwrap();
-    let res = searcher.search(&SearchQuery {
-        pattern: "abc".to_string(),
-        ..Default::default()
-    });
+    // The blob's checksum verification rejects the segment at open — a clean
+    // `Corrupt` error (triggering the self-healing paths), never a panic.
+    let res = g.searcher();
     assert!(
         res.is_err(),
-        "corrupt postings must surface as an error, got {res:?}"
+        "corrupt postings must surface as an error at open, got a searcher"
     );
 
     // The always-answers entry point transparently falls back to a grep walk.
@@ -920,4 +916,191 @@ fn global_daemon_serves_multiple_projects() {
 
     std::fs::remove_dir_all(&a).ok();
     std::fs::remove_dir_all(&b).ok();
+}
+
+/// Tombstones published in the manifest but not yet applied to the on-disk
+/// live bitmaps (the atomic-delete window) must be honored by readers: a
+/// search opened against such a manifest never returns the tombstoned docs.
+#[test]
+fn pending_tombstones_are_subtracted_by_readers() {
+    use greplm_core::meta::PendingTombstones;
+
+    let root = temp_dir("pending-ts");
+    write(&root, "src/a.rs", "fn pending_alpha() {}\n");
+    write(&root, "src/b.rs", "fn pending_beta() {}\n");
+
+    let g = Greplm::open(&root).unwrap();
+    g.index(true).unwrap();
+
+    // Simulate the publish half of an incremental update: the manifest gains
+    // pending tombstones for every doc of the (only) segment, but the live
+    // bitmap on disk is untouched.
+    let paths = Paths::new(&root);
+    let meta_path = paths.meta_file();
+    let mut meta = Meta::load(&meta_path).unwrap();
+    let seg = *meta.segments.first().expect("one segment");
+    meta.pending_tombstones = vec![PendingTombstones {
+        segment_id: seg,
+        doc_ids: vec![0, 1],
+    }];
+    meta.save(&meta_path).unwrap();
+
+    let searcher = g.searcher().unwrap();
+    for marker in ["pending_alpha", "pending_beta"] {
+        let hits = searcher
+            .search(&SearchQuery {
+                pattern: marker.to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            hits.is_empty(),
+            "{marker} is pending-tombstoned and must not surface: {hits:?}"
+        );
+    }
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Auto-compaction is tiered: when the segment count crosses the threshold it
+/// merges only the smallest segments (down to half the threshold), so the
+/// index is never fully rewritten just because small deltas accumulated.
+#[test]
+fn auto_compaction_merges_partially() {
+    let root = temp_dir("tiered");
+    write(&root, "src/base1.rs", "fn tiered_base_one() {}\n");
+    write(&root, "src/base2.rs", "fn tiered_base_two() {}\n");
+
+    // Initial index, then lower the threshold so a handful of deltas trip it.
+    Greplm::open(&root).unwrap().index(true).unwrap();
+    std::fs::write(root.join(".greplm/config.toml"), "merge_threshold = 4\n").unwrap();
+    let g = Greplm::open(&root).unwrap();
+
+    for i in 0..4 {
+        write(
+            &root,
+            &format!("src/gen{i}.rs"),
+            &format!("fn tiered_gen{i}_fn() {{}}\n"),
+        );
+        g.index(false).unwrap();
+    }
+
+    let paths = Paths::new(&root);
+    let meta = Meta::load(&paths.meta_file()).unwrap();
+    assert!(
+        meta.segments.len() <= 4,
+        "auto-compaction should have run: {} segments",
+        meta.segments.len()
+    );
+    assert!(
+        meta.segments.len() > 1,
+        "tiered compaction must not collapse everything into one segment"
+    );
+    assert!(
+        meta.pending_tombstones.is_empty(),
+        "no tombstone journal should be left behind"
+    );
+
+    // Every file is still findable and counts stayed exact.
+    let searcher = g.searcher().unwrap();
+    for marker in [
+        "tiered_base_one",
+        "tiered_base_two",
+        "tiered_gen0_fn",
+        "tiered_gen3_fn",
+    ] {
+        let hits = searcher
+            .search(&SearchQuery {
+                pattern: marker.to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(!hits.is_empty(), "{marker} must survive tiered compaction");
+    }
+    assert_eq!(g.status().unwrap().doc_count, 6);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A renamed file (identical content at a new path) is re-indexed under the
+/// new path with its symbols intact, and the old path disappears.
+#[test]
+fn rename_carries_symbols_to_new_path() {
+    let root = temp_dir("rename");
+    write(
+        &root,
+        "src/old_name.rs",
+        "fn renamed_symbol_fn() {\n    helper_call();\n}\n",
+    );
+
+    let g = Greplm::open(&root).unwrap();
+    g.index(true).unwrap();
+
+    std::fs::rename(root.join("src/old_name.rs"), root.join("src/new_name.rs")).unwrap();
+    let stats = g.index(false).unwrap();
+    assert_eq!(stats.files_indexed, 1, "the new path is indexed");
+    assert_eq!(stats.files_removed, 1, "the old path is removed");
+
+    let searcher = g.searcher().unwrap();
+    let syms = searcher
+        .symbols(&SymbolQuery {
+            name: "renamed_symbol_fn".to_string(),
+            exact: true,
+            limit: 10,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(syms.len(), 1, "symbol exists exactly once after the rename");
+    assert_eq!(syms[0].path, "src/new_name.rs");
+
+    let hits = searcher
+        .search(&SearchQuery {
+            pattern: "renamed_symbol_fn".to_string(),
+            exhaustive: true,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(hits.iter().all(|h| h.path == "src/new_name.rs"));
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Corruption in a side table (here: the symbol table) is caught by its
+/// checksum footer at open — a clean `Corrupt` error, and the always-answers
+/// entry point still serves results via the grep fallback.
+#[test]
+fn corrupt_symbol_table_fails_checksum_cleanly() {
+    let root = temp_dir("corrupt-syms");
+    write(&root, "src/main.rs", "fn checksum_probe() {}\n");
+
+    let g = Greplm::open(&root).unwrap();
+    g.index(true).unwrap();
+
+    let paths = Paths::new(&root);
+    let meta = Meta::load(&paths.meta_file()).unwrap();
+    let seg = *meta.segments.first().expect("one segment");
+    let syms_path = paths.syms_file(seg);
+    let mut bytes = std::fs::read(&syms_path).unwrap();
+    let mid = bytes.len() / 2;
+    bytes[mid] ^= 0xFF;
+    std::fs::write(&syms_path, &bytes).unwrap();
+
+    assert!(
+        g.searcher().is_err(),
+        "a flipped bit in the symbol table must fail the checksum at open"
+    );
+
+    let hits = g
+        .search_or_grep(&SearchQuery {
+            pattern: "checksum_probe".to_string(),
+            exhaustive: true,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(
+        hits.iter().any(|h| h.path == "src/main.rs"),
+        "grep fallback should still answer over a corrupt index"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
 }
